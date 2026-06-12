@@ -65,8 +65,14 @@ const addStatusUpdate = (order, status, note, userId) => {
 // @access  Private (Delivery)
 router.get('/dashboard', protect, authorize('delivery'), async (req, res) => {
   try {
+    const filter = { delivery_boy: req.user.id };
+
+    if (req.query.scope === 'active') {
+      filter.status = { $ne: 'Delivered' };
+    }
+
     const deliveries = await populateDelivery(
-      Delivery.find({ delivery_boy: req.user.id }).sort('-createdAt')
+      Delivery.find(filter).sort('-createdAt')
     );
     res.json(deliveries);
   } catch (error) {

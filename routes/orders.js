@@ -33,6 +33,57 @@ const populateOrder = (query) =>
     .populate('user', 'name email phone')
     .populate('delivery_boy', 'name phone status availability_status');
 
+const HISTORY_ORDER_STATUSES = ['Delivered', 'Cancelled'];
+const HISTORY_RETENTION_DAYS = 20;
+const HISTORY_DEFAULT_LIMIT = 8;
+const HISTORY_MAX_LIMIT = 20;
+
+const getHistoryCutoffDate = () =>
+  new Date(Date.now() - HISTORY_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+
+const parsePositiveInt = (value, fallback) => {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const cleanupExpiredOrderHistory = async () => {
+  const cutoffDate = getHistoryCutoffDate();
+  const expiredOrders = await Order.find({
+    status: { $in: HISTORY_ORDER_STATUSES },
+    updatedAt: { $lt: cutoffDate },
+  }).select('_id');
+  const expiredOrderIds = expiredOrders.map((order) => order._id);
+
+  if (!expiredOrderIds.length) {
+    return 0;
+  }
+
+  await Delivery.deleteMany({ order: { $in: expiredOrderIds } });
+  await Order.deleteMany({ _id: { $in: expiredOrderIds } });
+  return expiredOrderIds.length;
+};
+
+const getHistoryFilterForUser = (user) => {
+  const filter = {
+    status: { $in: HISTORY_ORDER_STATUSES },
+    updatedAt: { $gte: getHistoryCutoffDate() },
+  };
+
+  if (user.role === 'vendor') {
+    filter.user = user.id;
+  }
+
+  if (user.role === 'delivery') {
+    filter.delivery_boy = user.id;
+  }
+
+  if (user.role === 'production') {
+    filter['status_updates.status'] = { $in: ['In Production', 'Ready'] };
+  }
+
+  return filter;
+};
+
 const getRazorpayClient = () => {
   if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
     throw new Error('Razorpay key id and secret are not configured on the server');
@@ -193,6 +244,36 @@ router.get('/', protect, authorize('sales', 'production', 'delivery', 'admin'), 
 
     const orders = await populateOrder(Order.find(filter).sort('-createdAt'));
     res.json(orders);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// @route   GET /api/orders/history
+// @desc    Get role-aware order history, paged 8 at a time and retained for 20 days
+// @access  Private (Vendor/Sales/Production/Delivery/Admin)
+router.get('/history', protect, authorize('vendor', 'sales', 'production', 'delivery', 'admin'), async (req, res) => {
+  try {
+    const page = parsePositiveInt(req.query.page, 1);
+    const limit = Math.min(parsePositiveInt(req.query.limit, HISTORY_DEFAULT_LIMIT), HISTORY_MAX_LIMIT);
+    const skip = (page - 1) * limit;
+    const deletedExpired = await cleanupExpiredOrderHistory();
+    const filter = getHistoryFilterForUser(req.user);
+
+    const [orders, total] = await Promise.all([
+      populateOrder(Order.find(filter).sort('-updatedAt').skip(skip).limit(limit)),
+      Order.countDocuments(filter),
+    ]);
+
+    res.json({
+      orders,
+      page,
+      limit,
+      total,
+      hasMore: skip + orders.length < total,
+      deletedExpired,
+      retentionDays: HISTORY_RETENTION_DAYS,
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

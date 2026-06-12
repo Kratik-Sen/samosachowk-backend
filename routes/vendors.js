@@ -7,6 +7,8 @@ const Wallet = require('../models/Wallet');
 const Delivery = require('../models/Delivery');
 const { emitResourceChanged } = require('../realtime');
 
+const ACTIVE_ORDER_STATUSES = ['Pending', 'Verified', 'In Production', 'Ready', 'Out for Delivery'];
+
 const formatCoordinate = (value) => Number(value).toFixed(5);
 
 const normalizeLocationPayload = (body) => {
@@ -65,7 +67,9 @@ router.post('/register', protect, authorize('vendor'), async (req, res) => {
 // @access  Private (Vendor)
 router.get('/dashboard', protect, authorize('vendor'), async (req, res) => {
   try {
-    const orders = await Order.find({ user: req.user.id }).sort('-createdAt').limit(5);
+    const orders = await Order.find({ user: req.user.id, status: { $in: ACTIVE_ORDER_STATUSES } })
+      .sort('-createdAt')
+      .limit(5);
     const wallet = await Wallet.findOne({ user: req.user.id });
     
     // Calculate total spent
@@ -94,7 +98,13 @@ router.get('/dashboard', protect, authorize('vendor'), async (req, res) => {
 // @access  Private (Vendor)
 router.get('/orders', protect, authorize('vendor'), async (req, res) => {
   try {
-    const orders = await Order.find({ user: req.user.id })
+    const filter = { user: req.user.id };
+
+    if (req.query.scope === 'active') {
+      filter.status = { $in: ACTIVE_ORDER_STATUSES };
+    }
+
+    const orders = await Order.find(filter)
       .sort('-createdAt')
       .populate('delivery_boy', 'name phone status');
     const deliveries = await Delivery.find({ order: { $in: orders.map((order) => order._id) } });
