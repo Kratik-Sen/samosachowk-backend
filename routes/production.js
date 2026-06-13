@@ -65,6 +65,8 @@ router.put('/orders/:id/start', protect, authorize('production', 'admin'), async
       action: 'production-started',
       entity: 'order',
       entityId: order._id,
+      audienceUsers: [order.user],
+      audienceRoles: ['admin', 'sales', 'production'],
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -96,6 +98,8 @@ router.put('/orders/:id/ready', protect, authorize('production', 'admin'), async
       action: 'ready',
       entity: 'order',
       entityId: order._id,
+      audienceUsers: [order.user],
+      audienceRoles: ['admin', 'sales', 'production'],
     });
   } catch (error) {
     res.status(500).json({ message: error.message });

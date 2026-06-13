@@ -225,6 +225,8 @@ router.post('/', optionalAuth, async (req, res) => {
       action: 'created',
       entity: 'order',
       entityId: order._id,
+      audienceUsers: [order.user],
+      audienceRoles: ['admin', 'sales'],
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -320,6 +322,8 @@ router.put('/:id/status', protect, authorize('sales', 'production', 'delivery', 
         action: 'status-updated',
         entity: 'order',
         entityId: order._id,
+        audienceUsers: [order.user, order.delivery_boy],
+        audienceRoles: ['admin', 'sales', 'production'],
       });
     } else {
       res.status(404).json({ message: 'Order not found' });
@@ -345,6 +349,8 @@ router.put('/:id/verify', protect, authorize('sales', 'admin'), async (req, res)
         action: 'verified',
         entity: 'order',
         entityId: order._id,
+        audienceUsers: [order.user],
+        audienceRoles: ['admin', 'sales', 'production'],
       });
     } else {
       res.status(404).json({ message: 'Order not found' });
@@ -392,10 +398,12 @@ router.put('/:id/assign-delivery', protect, authorize('admin', 'sales', 'deliver
 
       res.json(updatedOrder);
       emitResourceChanged(req, {
-        domains: ['orders', 'deliveries', 'sales', 'admin', 'vendors'],
+        domains: ['orders', 'deliveries', 'sales', 'production', 'admin', 'vendors'],
         action: 'delivery-assigned',
         entity: 'order',
         entityId: order._id,
+        audienceUsers: [order.user, req.body.delivery_boy_id],
+        audienceRoles: ['admin', 'sales', 'production'],
       });
     } else {
       res.status(404).json({ message: 'Order not found' });

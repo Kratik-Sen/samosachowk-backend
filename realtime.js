@@ -6,6 +6,25 @@ const userRoom = (userId) => `user:${userId}`;
 const deliveryRoom = (deliveryId) => `delivery:${deliveryId}`;
 const roleRoom = (role) => `role:${role}`;
 
+const toIdString = (value) => {
+  if (!value) {
+    return '';
+  }
+
+  return (value._id || value.id || value).toString();
+};
+
+const uniqueStrings = (values = []) =>
+  Array.from(new Set(values.map((value) => toIdString(value)).filter(Boolean)));
+
+const getUserPhone = (user) => {
+  if (!user || typeof user !== 'object') {
+    return '';
+  }
+
+  return user.phone || '';
+};
+
 const serializeLocation = (location) => {
   if (!location) {
     return null;
@@ -27,7 +46,11 @@ const serializeLocation = (location) => {
 };
 
 const canJoinDelivery = async (user, deliveryId) => {
-  const delivery = await Delivery.findById(deliveryId).populate('order', 'user delivery_address status');
+  const delivery = await Delivery.findById(deliveryId).populate({
+    path: 'order',
+    select: 'user customer_name customer_phone delivery_address status',
+    populate: { path: 'user', select: 'name phone' },
+  });
 
   if (!delivery || !delivery.order) {
     return null;
@@ -199,12 +222,20 @@ const emitDeliveryAssigned = async (req, deliveryId) => {
     orderId: delivery.order._id.toString(),
     status: delivery.status,
     orderStatus: delivery.order.status,
+    customer_name: delivery.order.customer_name,
+    vendor_name: delivery.order.user?.name || delivery.order.customer_name,
+    vendor_phone: getUserPhone(delivery.order.user) || delivery.order.customer_phone || '',
     current_location: serializeLocation(delivery.current_location),
     vendor_location: serializeLocation(delivery.order.delivery_address),
+    updatedAt: new Date().toISOString(),
   };
 
   io.to(userRoom(delivery.delivery_boy)).emit('delivery:assigned', payload);
-  io.to(userRoom(delivery.order.user)).emit('delivery:assigned', payload);
+  const vendorUserId = toIdString(delivery.order.user);
+
+  if (vendorUserId) {
+    io.to(userRoom(vendorUserId)).emit('delivery:assigned', payload);
+  }
 };
 
 const emitDeliveryStatus = (req, delivery) => {
@@ -236,23 +267,39 @@ const emitDeliveryStatus = (req, delivery) => {
   }
 };
 
-const emitResourceChanged = (req, { domains = [], action, entity, entityId, users = [], roles = [] } = {}) => {
+const emitResourceChanged = (
+  req,
+  {
+    domains = [],
+    action,
+    entity,
+    entityId,
+    users = [],
+    roles = [],
+    audienceUsers = [],
+    audienceRoles = [],
+  } = {}
+) => {
   const io = req.app.get('io');
 
   if (!io) {
     return;
   }
 
+  const payloadUsers = uniqueStrings(audienceUsers);
+  const payloadRoles = uniqueStrings(audienceRoles);
   const payload = {
     domains: Array.from(new Set(domains)),
     action,
     entity,
     entityId: entityId?.toString(),
+    audienceUsers: payloadUsers,
+    audienceRoles: payloadRoles,
     updatedAt: new Date().toISOString(),
   };
   const rooms = [
-    ...users.filter(Boolean).map((userId) => userRoom(userId)),
-    ...roles.filter(Boolean).map((role) => roleRoom(role)),
+    ...uniqueStrings(users).map((userId) => userRoom(userId)),
+    ...uniqueStrings(roles).map((role) => roleRoom(role)),
   ];
 
   if (!rooms.length) {

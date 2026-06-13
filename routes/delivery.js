@@ -160,10 +160,12 @@ router.put('/:id/accept', protect, authorize('delivery'), async (req, res) => {
       const trackedDelivery = await Delivery.findById(delivery._id).populate('order', 'user status');
       emitDeliveryStatus(req, trackedDelivery);
       emitResourceChanged(req, {
-        domains: ['deliveries', 'orders', 'sales', 'admin', 'vendors'],
+        domains: ['deliveries', 'orders', 'sales', 'production', 'admin', 'vendors'],
         action: 'accepted',
         entity: 'delivery',
         entityId: delivery._id,
+        audienceUsers: [order?.user, delivery.delivery_boy],
+        audienceRoles: ['admin', 'sales', 'production'],
       });
       
       res.json(delivery);
@@ -224,10 +226,12 @@ router.put('/:id/delivered', protect, authorize('delivery'), async (req, res) =>
       const trackedDelivery = await Delivery.findById(delivery._id).populate('order', 'user status');
       emitDeliveryStatus(req, trackedDelivery);
       emitResourceChanged(req, {
-        domains: ['deliveries', 'orders', 'sales', 'admin', 'vendors', 'wallet'],
+        domains: ['deliveries', 'orders', 'sales', 'production', 'admin', 'vendors', 'wallet'],
         action: 'delivered',
         entity: 'delivery',
         entityId: delivery._id,
+        audienceUsers: [order.user, delivery.delivery_boy],
+        audienceRoles: ['admin', 'sales', 'production'],
       });
       
       res.json(delivery);
