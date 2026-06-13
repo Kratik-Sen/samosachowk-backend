@@ -14,13 +14,14 @@ const serializeLocation = (location) => {
   const lat = Number(location.lat);
   const lng = Number(location.lng);
 
-  if (Number.isNaN(lat) || Number.isNaN(lng)) {
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
     return null;
   }
 
   return {
     lat,
     lng,
+    ...(location.location || location.address ? { location: location.location || location.address } : {}),
     updated_at: location.updated_at || new Date(),
   };
 };
@@ -138,6 +139,7 @@ const emitDeliveryLocation = (req, delivery) => {
     deliveryId: delivery._id.toString(),
     orderId: orderId?.toString(),
     current_location: serializeLocation(delivery.current_location),
+    vendor_location: serializeLocation(order?.delivery_address),
   };
 
   io.to(deliveryRoom(delivery._id)).emit('delivery:location', payload);
@@ -148,6 +150,34 @@ const emitDeliveryLocation = (req, delivery) => {
 
   if (deliveryBoyId) {
     io.to(userRoom(deliveryBoyId)).emit('delivery:location', payload);
+  }
+};
+
+const emitVendorLocation = (req, delivery) => {
+  const io = req.app.get('io');
+
+  if (!io || !delivery) {
+    return;
+  }
+
+  const order = delivery.order;
+  const orderId = order?._id || order;
+  const vendorUserId = order?.user;
+  const deliveryBoyId = delivery.delivery_boy;
+  const payload = {
+    deliveryId: delivery._id.toString(),
+    orderId: orderId?.toString(),
+    vendor_location: serializeLocation(order?.delivery_address),
+  };
+
+  io.to(deliveryRoom(delivery._id)).emit('vendor:location', payload);
+
+  if (vendorUserId) {
+    io.to(userRoom(vendorUserId)).emit('vendor:location', payload);
+  }
+
+  if (deliveryBoyId) {
+    io.to(userRoom(deliveryBoyId)).emit('vendor:location', payload);
   }
 };
 
@@ -239,6 +269,7 @@ module.exports = {
   createRealtimeServer,
   emitDeliveryAssigned,
   emitDeliveryLocation,
+  emitVendorLocation,
   emitResourceChanged,
   emitDeliveryStatus,
 };

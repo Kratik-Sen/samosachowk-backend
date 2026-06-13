@@ -5,7 +5,7 @@ const Vendor = require('../models/Vendor');
 const Order = require('../models/Order');
 const Wallet = require('../models/Wallet');
 const Delivery = require('../models/Delivery');
-const { emitResourceChanged } = require('../realtime');
+const { emitResourceChanged, emitVendorLocation } = require('../realtime');
 
 const ACTIVE_ORDER_STATUSES = ['Pending', 'Verified', 'In Production', 'Ready', 'Out for Delivery'];
 
@@ -16,7 +16,7 @@ const normalizeLocationPayload = (body) => {
   const lat = Number(source?.lat);
   const lng = Number(source?.lng);
 
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
     return null;
   }
 
@@ -147,6 +147,9 @@ router.put('/orders/:id/location', protect, authorize('vendor'), async (req, res
 
     order.delivery_address = nextLocation;
     await order.save();
+
+    const delivery = await Delivery.findOne({ order: order._id }).populate('order', 'user delivery_address status');
+    emitVendorLocation(req, delivery);
 
     res.json(nextLocation);
     emitResourceChanged(req, {

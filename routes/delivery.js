@@ -16,7 +16,7 @@ const toCoordinate = (location) => {
   const lat = Number(location?.lat ?? location?.latitude);
   const lng = Number(location?.lng ?? location?.longitude);
 
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
     return null;
   }
 
@@ -248,7 +248,7 @@ router.post('/:id/location', protect, authorize('delivery'), async (req, res) =>
     const parsedLat = Number(lat);
     const parsedLng = Number(lng);
 
-    if (Number.isNaN(parsedLat) || Number.isNaN(parsedLng)) {
+    if (!Number.isFinite(parsedLat) || !Number.isFinite(parsedLng) || Math.abs(parsedLat) > 90 || Math.abs(parsedLng) > 180) {
       return res.status(400).json({ message: 'Valid latitude and longitude are required' });
     }
 
