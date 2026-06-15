@@ -175,13 +175,20 @@ router.put('/:id', protect, authorize('admin'), upload.single('image'), async (r
 // @access  Private (Admin)
 router.delete('/:id', protect, authorize('admin'), async (req, res) => {
   try {
-    const product = await Product.findByIdAndDelete(req.params.id);
+    const product = await Product.findByIdAndUpdate(
+      req.params.id,
+      { status: 'Inactive' },
+      {
+        new: true,
+        runValidators: true,
+      }
+    );
 
     if (!product) {
       return res.status(404).json({ message: 'Product not found' });
     }
 
-    res.json({ message: 'Product deleted' });
+    res.json({ message: 'Product removed' });
     emitResourceChanged(req, {
       domains: ['products', 'admin', 'vendors'],
       action: 'deleted',

@@ -31,6 +31,7 @@ const addStatusUpdate = (order, status, note, userId) => {
 const populateOrder = (query) =>
   query
     .populate('user', 'name email phone')
+    .populate('items.product', 'name category image price status packages')
     .populate('delivery_boy', 'name phone status availability_status');
 
 const HISTORY_ORDER_STATUSES = ['Delivered', 'Cancelled'];
