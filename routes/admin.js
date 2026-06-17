@@ -14,6 +14,7 @@ const manageableRoles = ['vendor', 'sales', 'production', 'delivery'];
 const allRoles = [...manageableRoles, 'admin'];
 
 const publicUserFields = '-password';
+const REDEEM_MIN_POINTS = 3000;
 
 const serializePublicUser = (user) => {
   const data = user.toObject ? user.toObject() : { ...user };
@@ -76,6 +77,117 @@ const getOrderStats = async () => {
   };
 };
 
+const addIdToSet = (set, value) => {
+  const id = value?._id || value;
+
+  if (id) {
+    set.add(id.toString());
+  }
+};
+
+const isWithinRange = (value, start, end) => {
+  const date = new Date(value);
+
+  return !Number.isNaN(date.getTime()) && date >= start && date < end;
+};
+
+const getPeriodAnalytics = async (start, end) => {
+  const orders = await Order.find({
+    createdAt: { $gte: start, $lt: end },
+  })
+    .select('user delivery_boy final_amount payment_status status_updates')
+    .lean();
+  const activeSets = {
+    vendor: new Set(),
+    sales: new Set(),
+    production: new Set(),
+    delivery: new Set(),
+  };
+  const summary = orders.reduce(
+    (acc, order) => {
+      acc.totalOrders += 1;
+      acc.revenue += Number(order.final_amount || 0);
+      if (order.payment_status === 'completed') {
+        acc.paidRevenue += Number(order.final_amount || 0);
+      } else {
+        acc.pendingPayments += Number(order.final_amount || 0);
+      }
+
+      addIdToSet(activeSets.vendor, order.user);
+      addIdToSet(activeSets.delivery, order.delivery_boy);
+
+      (order.status_updates || []).forEach((update) => {
+        if (!isWithinRange(update.updated_at, start, end)) {
+          return;
+        }
+
+        if (update.status === 'Verified') {
+          addIdToSet(activeSets.sales, update.updated_by);
+        }
+
+        if (['In Production', 'Ready'].includes(update.status)) {
+          addIdToSet(activeSets.production, update.updated_by);
+        }
+      });
+
+      return acc;
+    },
+    { totalOrders: 0, revenue: 0, paidRevenue: 0, pendingPayments: 0 }
+  );
+
+  return {
+    ...summary,
+    activeCounts: {
+      vendor: activeSets.vendor.size,
+      sales: activeSets.sales.size,
+      production: activeSets.production.size,
+      delivery: activeSets.delivery.size,
+    },
+  };
+};
+
+const getRevenuePeriods = async () => {
+  const now = new Date();
+  const todayStart = new Date(now);
+  todayStart.setHours(0, 0, 0, 0);
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+  const [today, monthly] = await Promise.all([
+    getPeriodAnalytics(todayStart, now),
+    getPeriodAnalytics(monthStart, now),
+  ]);
+
+  return {
+    today,
+    monthly,
+  };
+};
+
+const serializeRewardRequest = (wallet, request) => ({
+  _id: request._id,
+  walletId: wallet._id,
+  user: wallet.user,
+  points: request.points,
+  status: request.status,
+  notes: request.notes,
+  reward_note: request.reward_note,
+  requestedAt: request.requestedAt,
+  reviewedAt: request.reviewedAt,
+  reviewedBy: request.reviewedBy,
+  currentRewardPoints: wallet.reward_points,
+});
+
+const getRewardRequests = async () => {
+  const wallets = await Wallet.find({ 'reward_redemptions.0': { $exists: true } })
+    .populate('user', 'name email phone role')
+    .sort('-updatedAt');
+  const requests = wallets.flatMap((wallet) =>
+    (wallet.reward_redemptions || []).map((request) => serializeRewardRequest(wallet, request))
+  );
+
+  return requests.sort((a, b) => new Date(b.requestedAt || 0) - new Date(a.requestedAt || 0));
+};
+
 // @route   GET /api/admin/overview
 // @desc    Complete business overview for web/mobile admin panel
 // @access  Private (Admin)
@@ -91,6 +203,7 @@ router.get('/overview', ...adminOnly, async (req, res) => {
       walletStats,
       recentOrders,
       recentUsers,
+      revenuePeriods,
     ] = await Promise.all([
       getTeamCounts(),
       getOrderStats(),
@@ -109,6 +222,7 @@ router.get('/overview', ...adminOnly, async (req, res) => {
       ]),
       Order.find({}).sort('-createdAt').limit(8).populate('user', 'name email role'),
       User.find({ role: { $ne: 'admin' } }).sort('-createdAt').limit(8).select(publicUserFields),
+      getRevenuePeriods(),
     ]);
 
     res.json({
@@ -120,8 +234,95 @@ router.get('/overview', ...adminOnly, async (req, res) => {
       activeDeliveries,
       walletBalance: walletStats[0]?.walletBalance || 0,
       rewardPoints: walletStats[0]?.rewardPoints || 0,
+      revenuePeriods,
       recentOrders,
       recentUsers: recentUsers.map(serializePublicUser),
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// @route   GET /api/admin/rewards
+// @desc    Reward redeem requests for admin review
+// @access  Private (Admin)
+router.get('/rewards', ...adminOnly, async (req, res) => {
+  try {
+    res.json(await getRewardRequests());
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// @route   PUT /api/admin/rewards/:requestId
+// @desc    Verify or unverify a reward redeem request
+// @access  Private (Admin)
+router.put('/rewards/:requestId', ...adminOnly, async (req, res) => {
+  try {
+    const nextStatus = req.body.status === 'verified' ? 'verified' : req.body.status === 'rejected' ? 'rejected' : '';
+
+    if (!nextStatus) {
+      return res.status(400).json({ message: 'Use verified or rejected status' });
+    }
+
+    const wallet = await Wallet.findOne({ 'reward_redemptions._id': req.params.requestId }).populate(
+      'user',
+      'name email phone role'
+    );
+
+    if (!wallet) {
+      return res.status(404).json({ message: 'Reward request not found' });
+    }
+
+    const request = wallet.reward_redemptions.id(req.params.requestId);
+
+    if (!request) {
+      return res.status(404).json({ message: 'Reward request not found' });
+    }
+
+    if (request.status !== 'pending') {
+      return res.status(400).json({ message: 'This reward request has already been reviewed' });
+    }
+
+    if (nextStatus === 'verified' && wallet.reward_points < request.points) {
+      return res.status(400).json({ message: 'Vendor no longer has enough points for this redemption' });
+    }
+
+    request.status = nextStatus;
+    request.reviewedAt = new Date();
+    request.reward_note = req.body.reward_note || req.body.notes || '';
+    if (req.user.id !== 'env-admin') {
+      request.reviewedBy = req.user.id;
+    }
+
+    if (nextStatus === 'verified') {
+      wallet.reward_points -= request.points;
+      wallet.transactions.unshift({
+        title: 'Admin verified redeem points',
+        type: 'redemption',
+        points: request.points,
+        status: 'completed',
+        notes: request.reward_note || 'Admin verified redeem points.',
+      });
+    } else {
+      wallet.transactions.unshift({
+        title: 'Reward redeem request unverified',
+        type: 'redemption',
+        points: request.points,
+        status: 'failed',
+        notes: request.reward_note || 'Admin did not verify this redeem request.',
+      });
+    }
+
+    await wallet.save();
+    res.json(serializeRewardRequest(wallet, request));
+    emitResourceChanged(req, {
+      domains: ['wallet', 'vendors', 'admin', 'rewards'],
+      action: nextStatus === 'verified' ? 'redeem-verified' : 'redeem-rejected',
+      entity: 'reward-redemption',
+      entityId: request._id,
+      audienceUsers: [wallet.user?._id || wallet.user],
+      audienceRoles: ['admin'],
     });
   } catch (error) {
     res.status(500).json({ message: error.message });

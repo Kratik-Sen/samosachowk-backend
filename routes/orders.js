@@ -6,6 +6,7 @@ const { protect, optionalAuth, authorize } = require('../middleware/auth');
 const Order = require('../models/Order');
 const Delivery = require('../models/Delivery');
 const User = require('../models/User');
+const Wallet = require('../models/Wallet');
 const { emitDeliveryAssigned, emitResourceChanged } = require('../realtime');
 
 const normalizePaymentMethod = (method) => {
@@ -19,6 +20,42 @@ const normalizePaymentMethod = (method) => {
 };
 
 const roundMoney = (value) => Math.round(Number(value || 0) * 100) / 100;
+const REWARD_SPEND_STEP = 100;
+const REWARD_POINTS_PER_STEP = 100;
+
+const awardOrderRewards = async ({ userId, userRole, amount, orderId }) => {
+  if (!userId || userRole !== 'vendor' || amount <= 0) {
+    return null;
+  }
+
+  let wallet = await Wallet.findOne({ user: userId });
+
+  if (!wallet) {
+    wallet = await Wallet.create({ user: userId });
+  }
+
+  wallet.reward_order_total = roundMoney(Number(wallet.reward_order_total || 0) + Number(amount || 0));
+  const completedThresholds = Math.floor(wallet.reward_order_total / REWARD_SPEND_STEP);
+  const newlyCompletedThresholds = Math.max(0, completedThresholds - Number(wallet.reward_thresholds_awarded || 0));
+
+  if (!newlyCompletedThresholds) {
+    await wallet.save();
+    return { wallet, pointsAwarded: 0 };
+  }
+
+  const pointsAwarded = newlyCompletedThresholds * REWARD_POINTS_PER_STEP;
+  wallet.reward_thresholds_awarded = completedThresholds;
+  wallet.reward_points += pointsAwarded;
+  wallet.transactions.unshift({
+    title: 'Order reward coins',
+    type: 'reward',
+    points: pointsAwarded,
+    notes: `Reward for completing Rs ${completedThresholds * REWARD_SPEND_STEP} order value. Order ${orderId?.toString().slice(-6).toUpperCase()}.`,
+  });
+
+  await wallet.save();
+  return { wallet, pointsAwarded };
+};
 
 const addStatusUpdate = (order, status, note, userId) => {
   order.status_updates.push({
@@ -220,15 +257,31 @@ router.post('/', optionalAuth, async (req, res) => {
       ],
     });
 
+    const rewardResult = await awardOrderRewards({
+      userId: order.user,
+      userRole: req.user?.role,
+      amount: normalizedFinalAmount,
+      orderId: order._id,
+    });
+
     res.status(201).json(order);
     emitResourceChanged(req, {
-      domains: ['orders', 'sales', 'admin', 'vendors'],
+      domains: ['orders', 'sales', 'admin', 'vendors', ...(rewardResult?.pointsAwarded ? ['wallet', 'rewards'] : [])],
       action: 'created',
       entity: 'order',
       entityId: order._id,
       audienceUsers: [order.user],
       audienceRoles: ['admin', 'sales'],
     });
+    if (rewardResult?.pointsAwarded) {
+      emitResourceChanged(req, {
+        domains: ['wallet', 'vendors', 'rewards'],
+        action: 'earned',
+        entity: 'reward',
+        entityId: rewardResult.wallet._id,
+        audienceUsers: [order.user],
+      });
+    }
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

@@ -4,6 +4,8 @@ const { protect, authorize } = require('../middleware/auth');
 const Wallet = require('../models/Wallet');
 const { emitResourceChanged } = require('../realtime');
 
+const REDEEM_MIN_POINTS = 3000;
+
 // @route   GET /api/wallet
 // @desc    Get current user wallet balance
 // @access  Private
@@ -22,15 +24,15 @@ router.get('/', protect, async (req, res) => {
 });
 
 // @route   POST /api/wallet/redeem
-// @desc    Redeem reward points
-// @access  Private
-router.post('/redeem', protect, async (req, res) => {
+// @desc    Request reward point redemption for admin review
+// @access  Private (Vendor)
+router.post('/redeem', protect, authorize('vendor'), async (req, res) => {
   try {
     const { points, notes } = req.body;
-    const redeemPoints = Number(points || 0);
+    const redeemPoints = Number(points || REDEEM_MIN_POINTS);
 
-    if (redeemPoints <= 0) {
-      return res.status(400).json({ message: 'Enter points to redeem' });
+    if (redeemPoints < REDEEM_MIN_POINTS) {
+      return res.status(400).json({ message: `Collect ${REDEEM_MIN_POINTS} reward points before redeeming` });
     }
 
     let wallet = await Wallet.findOne({ user: req.user.id });
@@ -43,23 +45,35 @@ router.post('/redeem', protect, async (req, res) => {
       return res.status(400).json({ message: 'Not enough reward points' });
     }
 
-    wallet.reward_points -= redeemPoints;
-    wallet.balance += redeemPoints;
-    wallet.transactions.unshift({
-      title: 'Reward redemption',
-      type: 'redemption',
-      amount: redeemPoints,
+    const hasPendingRequest = (wallet.reward_redemptions || []).some((request) => request.status === 'pending');
+
+    if (hasPendingRequest) {
+      return res.status(400).json({ message: 'A redeem request is already pending with admin' });
+    }
+
+    wallet.reward_redemptions.unshift({
       points: redeemPoints,
       notes,
+      status: 'pending',
+      requestedAt: new Date(),
+    });
+    wallet.transactions.unshift({
+      title: 'Reward redeem request sent',
+      type: 'redemption',
+      points: redeemPoints,
+      status: 'pending',
+      notes: notes || 'Waiting for admin verification.',
     });
 
     const updatedWallet = await wallet.save();
     res.json(updatedWallet);
     emitResourceChanged(req, {
-      domains: ['wallet', 'vendors', 'admin'],
-      action: 'redeemed',
-      entity: 'wallet',
+      domains: ['wallet', 'vendors', 'admin', 'rewards'],
+      action: 'redeem-requested',
+      entity: 'reward-redemption',
       entityId: wallet._id,
+      audienceUsers: [req.user.id],
+      audienceRoles: ['admin'],
     });
   } catch (error) {
     res.status(500).json({ message: error.message });

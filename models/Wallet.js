@@ -15,6 +15,32 @@ const walletSchema = mongoose.Schema(
       type: Number,
       default: 0,
     },
+    reward_order_total: {
+      type: Number,
+      default: 0,
+    },
+    reward_thresholds_awarded: {
+      type: Number,
+      default: 0,
+    },
+    reward_redemptions: [
+      {
+        points: { type: Number, required: true },
+        status: {
+          type: String,
+          enum: ['pending', 'verified', 'rejected'],
+          default: 'pending',
+        },
+        notes: String,
+        reward_note: String,
+        requestedAt: { type: Date, default: Date.now },
+        reviewedAt: Date,
+        reviewedBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'User',
+        },
+      },
+    ],
     transactions: [
       {
         title: { type: String, required: true },
