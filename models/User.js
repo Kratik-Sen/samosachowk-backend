@@ -41,6 +41,18 @@ const userSchema = mongoose.Schema(
       enum: ['active', 'inactive'],
       default: 'inactive',
     },
+    otpVerificationMethod: {
+      type: String,
+      enum: ['email', 'whatsapp'],
+    },
+    otpHash: String,
+    otpExpiresAt: Date,
+    otpRequestedAt: Date,
+    otpVerifiedAt: Date,
+    otpAttempts: {
+      type: Number,
+      default: 0,
+    },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
