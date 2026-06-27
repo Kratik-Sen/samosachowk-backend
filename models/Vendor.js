@@ -1,5 +1,9 @@
 const mongoose = require('mongoose');
 
+const missingValues = new Set(['', 'not provided']);
+
+const normalizeProfileValue = (value) => String(value || '').trim();
+
 const vendorSchema = mongoose.Schema(
   {
     user: {
@@ -49,8 +53,34 @@ const vendorSchema = mongoose.Schema(
   },
   {
     timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true },
   }
 );
+
+vendorSchema.methods.getMissingProfileFields = function () {
+  const location = this.location || {};
+  const fields = [
+    ['store_name', this.store_name],
+    ['owner_name', this.owner_name],
+    ['address', location.address],
+    ['city', location.city],
+    ['state', location.state],
+    ['zip', location.zip],
+  ];
+
+  return fields
+    .filter(([, value]) => missingValues.has(normalizeProfileValue(value).toLowerCase()))
+    .map(([field]) => field);
+};
+
+vendorSchema.virtual('profile_complete').get(function () {
+  return this.getMissingProfileFields().length === 0;
+});
+
+vendorSchema.virtual('missing_profile_fields').get(function () {
+  return this.getMissingProfileFields();
+});
 
 // Geo-spatial index for location-based queries
 vendorSchema.index({ 'location.lat': 1, 'location.lng': 1 });

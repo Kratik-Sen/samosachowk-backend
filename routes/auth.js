@@ -22,6 +22,15 @@ const normalizePhone = (phone) => String(phone || '').trim();
 
 const generateOtp = () => crypto.randomInt(100000, 1000000).toString();
 
+const getVendorProfileState = async (userId) => {
+  const vendor = await Vendor.findOne({ user: userId });
+
+  return {
+    vendor_profile_complete: Boolean(vendor?.profile_complete),
+    vendor_missing_profile_fields: vendor?.missing_profile_fields || [],
+  };
+};
+
 const hashOtp = (otp) =>
   crypto
     .createHash('sha256')
@@ -466,7 +475,8 @@ router.post('/vendor/verify-otp', async (req, res) => {
       phone: user.phone,
       role: user.role,
       status: user.status,
-      message: 'Vendor account verified. You can login now.',
+      ...(await getVendorProfileState(user._id)),
+      message: 'Vendor account verified. Login to complete your outlet details.',
     });
     emitResourceChanged(req, {
       domains: ['users', 'vendors', 'wallet', 'admin', 'sales'],
@@ -598,6 +608,8 @@ router.post('/login', async (req, res) => {
 
       user.lastLoginAt = new Date();
       await user.save();
+
+      const vendorProfileState = user.role === 'vendor' ? await getVendorProfileState(user._id) : {};
       
       res.json({
         _id: user.id,
@@ -607,6 +619,7 @@ router.post('/login', async (req, res) => {
         role: user.role,
         status: user.status,
         availability_status: user.availability_status || 'inactive',
+        ...vendorProfileState,
         token: generateToken(user._id, user.role),
       });
     } else {

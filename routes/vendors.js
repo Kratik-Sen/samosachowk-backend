@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { protect, authorize } = require('../middleware/auth');
 const Vendor = require('../models/Vendor');
+const User = require('../models/User');
 const Order = require('../models/Order');
 const Wallet = require('../models/Wallet');
 const Delivery = require('../models/Delivery');
@@ -10,6 +11,38 @@ const { emitResourceChanged, emitVendorLocation } = require('../realtime');
 const ACTIVE_ORDER_STATUSES = ['Pending', 'Verified', 'In Production', 'Ready', 'Out for Delivery'];
 
 const formatCoordinate = (value) => Number(value).toFixed(5);
+const requiredProfileFields = ['name', 'phone', 'store_name', 'address', 'city', 'state', 'zip'];
+
+const cleanText = (value) => String(value || '').trim();
+
+const normalizeProfilePayload = (body) => {
+  const location = body?.location && typeof body.location === 'object' ? body.location : {};
+
+  return {
+    name: cleanText(body?.name),
+    phone: cleanText(body?.phone),
+    store_name: cleanText(body?.store_name),
+    owner_name: cleanText(body?.owner_name || body?.name),
+    gst_number: cleanText(body?.gst_number),
+    location: {
+      address: cleanText(location.address),
+      city: cleanText(location.city),
+      state: cleanText(location.state),
+      zip: cleanText(location.zip),
+      lat: location.lat === '' || location.lat === undefined ? undefined : Number(location.lat),
+      lng: location.lng === '' || location.lng === undefined ? undefined : Number(location.lng),
+    },
+  };
+};
+
+const getMissingRequiredProfileFields = (profile) =>
+  requiredProfileFields.filter((field) => {
+    if (field === 'address' || field === 'city' || field === 'state' || field === 'zip') {
+      return !cleanText(profile.location?.[field]);
+    }
+
+    return !cleanText(profile[field]);
+  });
 
 const normalizeLocationPayload = (body) => {
   const source = body?.location && typeof body.location === 'object' ? body.location : body;
@@ -172,6 +205,71 @@ router.get('/profile', protect, authorize('vendor'), async (req, res) => {
   try {
     const vendor = await Vendor.findOne({ user: req.user.id }).populate('user', 'name email phone status');
     res.json(vendor);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// @route   PUT /api/vendors/profile
+// @desc    Let a vendor complete or update their own outlet profile
+// @access  Private (Vendor)
+router.put('/profile', protect, authorize('vendor'), async (req, res) => {
+  try {
+    const profile = normalizeProfilePayload(req.body);
+    const missingFields = getMissingRequiredProfileFields(profile);
+
+    if (missingFields.length) {
+      return res.status(400).json({
+        message: 'Complete all required vendor profile details.',
+        missingFields,
+      });
+    }
+
+    if (
+      profile.location.lat !== undefined &&
+      (!Number.isFinite(profile.location.lat) || Math.abs(profile.location.lat) > 90)
+    ) {
+      return res.status(400).json({ message: 'Valid latitude is required when location latitude is provided' });
+    }
+
+    if (
+      profile.location.lng !== undefined &&
+      (!Number.isFinite(profile.location.lng) || Math.abs(profile.location.lng) > 180)
+    ) {
+      return res.status(400).json({ message: 'Valid longitude is required when location longitude is provided' });
+    }
+
+    const user = await User.findById(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({ message: 'Vendor user not found' });
+    }
+
+    const vendor = await Vendor.findOne({ user: req.user.id });
+
+    if (!vendor) {
+      return res.status(404).json({ message: 'Vendor outlet profile not found. Verify the account again or contact admin.' });
+    }
+
+    user.name = profile.name;
+    user.phone = profile.phone;
+    await user.save();
+
+    vendor.store_name = profile.store_name;
+    vendor.owner_name = profile.owner_name;
+    vendor.gst_number = profile.gst_number;
+    vendor.location = profile.location;
+    await vendor.save();
+
+    const updatedVendor = await Vendor.findOne({ user: req.user.id }).populate('user', 'name email phone status');
+
+    res.json(updatedVendor);
+    emitResourceChanged(req, {
+      domains: ['vendors', 'users', 'admin', 'sales'],
+      action: 'profile-updated',
+      entity: 'vendor',
+      entityId: vendor._id,
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
