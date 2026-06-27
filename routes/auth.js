@@ -115,6 +115,12 @@ const formatMsg91WhatsAppRecipient = (phone) => {
   return digits;
 };
 
+const resolveMsg91TemplateValue = (value, variables) =>
+  String(value || '').replace(/\{\{\s*(otp|phone|recipient)\s*\}\}/gi, (_, key) => {
+    const normalizedKey = key.toLowerCase();
+    return variables[normalizedKey] || '';
+  });
+
 const sendWhatsAppOtp = async ({ phone, otp }) => {
   const authkey = process.env.MSG91_AUTHKEY;
   const integratedNumber = process.env.MSG91_WHATSAPP_INTEGRATED_NUMBER;
@@ -122,6 +128,10 @@ const sendWhatsAppOtp = async ({ phone, otp }) => {
   const namespace = process.env.MSG91_WHATSAPP_OTP_TEMPLATE_NAMESPACE;
   const language = process.env.MSG91_WHATSAPP_OTP_LANGUAGE || 'en';
   const componentKey = process.env.MSG91_WHATSAPP_OTP_COMPONENT_KEY || 'body_1';
+  const buttonKey = process.env.MSG91_WHATSAPP_OTP_BUTTON_KEY;
+  const buttonType = process.env.MSG91_WHATSAPP_OTP_BUTTON_TYPE || 'text';
+  const buttonSubtype = process.env.MSG91_WHATSAPP_OTP_BUTTON_SUBTYPE;
+  const buttonValueTemplate = process.env.MSG91_WHATSAPP_OTP_BUTTON_VALUE || '{{otp}}';
   const recipient = formatMsg91WhatsAppRecipient(phone);
 
   if (!authkey || !integratedNumber || !templateName) {
@@ -130,6 +140,30 @@ const sendWhatsAppOtp = async ({ phone, otp }) => {
 
   if (!recipient) {
     throw new Error('A valid vendor mobile number is required for WhatsApp OTP.');
+  }
+
+  const components = {
+    [componentKey]: {
+      type: 'text',
+      value: otp,
+    },
+  };
+
+  if (buttonKey) {
+    const buttonComponent = {
+      type: buttonType,
+      value: resolveMsg91TemplateValue(buttonValueTemplate, {
+        otp,
+        phone,
+        recipient,
+      }),
+    };
+
+    if (buttonSubtype) {
+      buttonComponent.subtype = buttonSubtype;
+    }
+
+    components[buttonKey] = buttonComponent;
   }
 
   const template = {
@@ -141,12 +175,7 @@ const sendWhatsAppOtp = async ({ phone, otp }) => {
     to_and_components: [
       {
         to: [recipient],
-        components: {
-          [componentKey]: {
-            type: 'text',
-            value: otp,
-          },
-        },
+        components,
       },
     ],
   };
