@@ -4,6 +4,13 @@ const missingValues = new Set(['', 'not provided']);
 
 const normalizeProfileValue = (value) => String(value || '').trim();
 
+const isDefaultOutletName = (storeName, ownerName) => {
+  const normalizedStoreName = normalizeProfileValue(storeName).toLowerCase();
+  const normalizedOwnerName = normalizeProfileValue(ownerName).toLowerCase();
+
+  return Boolean(normalizedOwnerName && normalizedStoreName === `${normalizedOwnerName}'s outlet`);
+};
+
 const vendorSchema = mongoose.Schema(
   {
     user: {
@@ -70,7 +77,13 @@ vendorSchema.methods.getMissingProfileFields = function () {
   ];
 
   return fields
-    .filter(([, value]) => missingValues.has(normalizeProfileValue(value).toLowerCase()))
+    .filter(([field, value]) => {
+      if (field === 'store_name' && isDefaultOutletName(value, this.owner_name)) {
+        return true;
+      }
+
+      return missingValues.has(normalizeProfileValue(value).toLowerCase());
+    })
     .map(([field]) => field);
 };
 
