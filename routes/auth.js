@@ -83,9 +83,14 @@ const postJson = async (url, body, headers = {}) => {
   return data;
 };
 
-const sendEmailOtp = async ({ email, name, otp }) => {
+const sendEmailOtp = async ({ email, name, otp, purpose = 'vendor signup' }) => {
   const apiKey = process.env.RESEND_API_KEY;
   const from = process.env.RESEND_FROM_EMAIL;
+  const isPasswordReset = purpose === 'password reset';
+  const subject = isPasswordReset
+    ? 'Samosa Chowk password reset OTP'
+    : 'Samosa Chowk vendor verification OTP';
+  const label = isPasswordReset ? 'password reset' : 'vendor signup';
 
   if (!apiKey || !from) {
     throw new Error('Resend is not configured. Add RESEND_API_KEY and RESEND_FROM_EMAIL in server .env.');
@@ -96,16 +101,16 @@ const sendEmailOtp = async ({ email, name, otp }) => {
     {
       from,
       to: [email],
-      subject: 'Samosa Chowk vendor verification OTP',
+      subject,
       html: `
         <div style="font-family:Arial,sans-serif;line-height:1.5;color:#181A16">
           <p>Hi ${escapeHtml(name || 'Vendor')},</p>
-          <p>Your Samosa Chowk vendor signup OTP is:</p>
+          <p>Your Samosa Chowk ${label} OTP is:</p>
           <p style="font-size:28px;font-weight:800;letter-spacing:4px">${otp}</p>
           <p>This code expires in ${getOtpExpiryMinutes()} minutes.</p>
         </div>
       `,
-      text: `Your Samosa Chowk vendor signup OTP is ${otp}. It expires in ${getOtpExpiryMinutes()} minutes.`,
+      text: `Your Samosa Chowk ${label} OTP is ${otp}. It expires in ${getOtpExpiryMinutes()} minutes.`,
     },
     {
       Authorization: `Bearer ${apiKey}`,
@@ -218,6 +223,14 @@ const sendVendorOtp = async ({ verificationMethod, email, phone, name, otp }) =>
   return sendWhatsAppOtp({ phone, otp });
 };
 
+const sendPasswordResetOtp = async ({ verificationMethod, email, phone, name, otp }) => {
+  if (verificationMethod === 'whatsapp') {
+    return sendWhatsAppOtp({ phone, otp });
+  }
+
+  return sendEmailOtp({ email, name, otp, purpose: 'password reset' });
+};
+
 const buildOtpFields = (otp, verificationMethod) => ({
   otpVerificationMethod: verificationMethod,
   otpHash: hashOtp(otp),
@@ -227,11 +240,18 @@ const buildOtpFields = (otp, verificationMethod) => ({
 });
 
 const clearOtpFields = (user) => {
-  user.otpVerificationMethod = undefined;
   user.otpHash = undefined;
   user.otpExpiresAt = undefined;
   user.otpRequestedAt = undefined;
   user.otpAttempts = 0;
+};
+
+const clearResetPasswordFields = (user) => {
+  user.resetPasswordToken = undefined;
+  user.resetPasswordExpire = undefined;
+  user.resetPasswordRequestedAt = undefined;
+  user.resetPasswordVerificationMethod = undefined;
+  user.resetPasswordAttempts = 0;
 };
 
 const buildReferralCode = (storeName) => {
@@ -631,11 +651,12 @@ router.post('/login', async (req, res) => {
 });
 
 // @route   POST /api/auth/forgot-password
-// @desc    Record a password reset request for admin follow-up
+// @desc    Send password reset OTP by the user's preferred verification method
 // @access  Public
 router.post('/forgot-password', async (req, res) => {
   try {
-    const { email, role } = req.body;
+    const email = normalizeEmail(req.body.email);
+    const { role } = req.body;
 
     if (role === 'admin') {
       return res.json({
@@ -643,12 +664,38 @@ router.post('/forgot-password', async (req, res) => {
       });
     }
 
+    if (!email) {
+      return res.status(400).json({ message: 'Email is required' });
+    }
+
     const user = await User.findOne({ email, ...(role ? { role } : {}) });
 
     if (user) {
-      user.resetPasswordToken = Math.random().toString(36).slice(2);
-      user.resetPasswordExpire = Date.now() + 60 * 60 * 1000;
+      if (user.status === 'suspended') {
+        return res.status(403).json({ message: 'This account is suspended. Contact admin.' });
+      }
+
+      const verificationMethod =
+        user.role === 'vendor' && user.otpVerificationMethod === 'whatsapp' ? 'whatsapp' : 'email';
+
+      if (verificationMethod === 'whatsapp' && !user.phone) {
+        return res.status(400).json({ message: 'No registered WhatsApp number found for this account.' });
+      }
+
+      const otp = generateOtp();
+      await sendPasswordResetOtp({
+        verificationMethod,
+        email: user.email,
+        phone: user.phone,
+        name: user.name,
+        otp,
+      });
+
+      user.resetPasswordToken = hashOtp(otp);
+      user.resetPasswordExpire = getOtpExpiry();
       user.resetPasswordRequestedAt = new Date();
+      user.resetPasswordVerificationMethod = verificationMethod;
+      user.resetPasswordAttempts = 0;
       await user.save();
 
       emitResourceChanged(req, {
@@ -658,11 +705,86 @@ router.post('/forgot-password', async (req, res) => {
         entityId: user._id,
         roles: ['admin'],
       });
+
+      return res.json({
+        verificationMethod,
+        expiresInMinutes: getOtpExpiryMinutes(),
+        message:
+          verificationMethod === 'whatsapp'
+            ? 'Password reset OTP sent to your registered WhatsApp number.'
+            : 'Password reset OTP sent to your registered email.',
+      });
     }
 
     res.json({
-      message: 'If this account exists, an admin can reset the password from access management.',
+      message: 'If this account exists, a password reset OTP will be sent.',
     });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// @route   POST /api/auth/reset-password
+// @desc    Reset account password using OTP
+// @access  Public
+router.post('/reset-password', async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body.email);
+    const otp = String(req.body.otp || '').trim();
+    const password = String(req.body.password || '');
+    const { role } = req.body;
+
+    if (role === 'admin') {
+      return res.status(400).json({ message: 'Admin password is managed from server .env only.' });
+    }
+
+    if (!email || !otp || !password) {
+      return res.status(400).json({ message: 'Email, OTP, and new password are required' });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({ message: 'Password must be at least 6 characters' });
+    }
+
+    const user = await User.findOne({ email, ...(role ? { role } : {}) }).select('+password');
+
+    if (!user) {
+      return res.status(404).json({ message: 'Reset request not found' });
+    }
+
+    if (!user.resetPasswordToken || !user.resetPasswordExpire) {
+      return res.status(400).json({ message: 'No active reset OTP found. Request a new OTP.' });
+    }
+
+    if (user.resetPasswordExpire.getTime() < Date.now()) {
+      clearResetPasswordFields(user);
+      await user.save();
+      return res.status(400).json({ message: 'Reset OTP expired. Request a new OTP.' });
+    }
+
+    if ((user.resetPasswordAttempts || 0) >= 5) {
+      return res.status(429).json({ message: 'Too many OTP attempts. Request a new OTP.' });
+    }
+
+    if (hashOtp(otp) !== user.resetPasswordToken) {
+      user.resetPasswordAttempts = (user.resetPasswordAttempts || 0) + 1;
+      await user.save();
+      return res.status(400).json({ message: 'Invalid OTP' });
+    }
+
+    user.password = password;
+    clearResetPasswordFields(user);
+    await user.save();
+
+    emitResourceChanged(req, {
+      domains: ['users', 'admin'],
+      action: 'password-reset-completed',
+      entity: 'user',
+      entityId: user._id,
+      roles: ['admin'],
+    });
+
+    res.json({ message: 'Password reset successfully. You can login with the new password.' });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

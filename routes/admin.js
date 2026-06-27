@@ -25,6 +25,8 @@ const serializePublicUser = (user) => {
   delete data.password;
   delete data.resetPasswordToken;
   delete data.resetPasswordExpire;
+  delete data.resetPasswordVerificationMethod;
+  delete data.resetPasswordAttempts;
 
   return {
     ...data,
@@ -568,6 +570,8 @@ router.put('/users/:id/password', ...adminOnly, async (req, res) => {
     user.resetPasswordToken = undefined;
     user.resetPasswordExpire = undefined;
     user.resetPasswordRequestedAt = undefined;
+    user.resetPasswordVerificationMethod = undefined;
+    user.resetPasswordAttempts = 0;
     await user.save();
 
     res.json({ message: 'Password updated' });

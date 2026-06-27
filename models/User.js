@@ -61,6 +61,14 @@ const userSchema = mongoose.Schema(
     resetPasswordToken: String,
     resetPasswordExpire: Date,
     resetPasswordRequestedAt: Date,
+    resetPasswordVerificationMethod: {
+      type: String,
+      enum: ['email', 'whatsapp'],
+    },
+    resetPasswordAttempts: {
+      type: Number,
+      default: 0,
+    },
   },
   {
     timestamps: true,
