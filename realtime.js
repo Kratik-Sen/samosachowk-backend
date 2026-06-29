@@ -1,10 +1,12 @@
 const jwt = require('jsonwebtoken');
 const { Server } = require('socket.io');
 const Delivery = require('./models/Delivery');
+const User = require('./models/User');
 
 const userRoom = (userId) => `user:${userId}`;
 const deliveryRoom = (deliveryId) => `delivery:${deliveryId}`;
 const roleRoom = (role) => `role:${role}`;
+const signupRoom = (role, email) => `signup:${role}:${String(email || '').trim().toLowerCase()}`;
 
 const toIdString = (value) => {
   if (!value) {
@@ -80,17 +82,33 @@ const createRealtimeServer = (server) => {
     },
   });
 
-  io.use((socket, next) => {
+  io.use(async (socket, next) => {
     const token =
       socket.handshake.auth?.token ||
       socket.handshake.headers?.authorization?.replace(/^Bearer\s+/i, '');
 
     if (!token) {
-      return next(new Error('Authentication token is required'));
+      socket.user = null;
+      return next();
     }
 
     try {
       socket.user = jwt.verify(token, process.env.JWT_SECRET);
+
+      if (socket.user.id !== 'env-admin') {
+        const user = await User.findById(socket.user.id).select('role status');
+
+        if (!user) {
+          return next(new Error('Account no longer exists'));
+        }
+
+        if (user.status !== 'active') {
+          return next(new Error('Account is not active'));
+        }
+
+        socket.user.role = user.role;
+      }
+
       return next();
     } catch (error) {
       return next(new Error('Authentication token is invalid'));
@@ -98,11 +116,52 @@ const createRealtimeServer = (server) => {
   });
 
   io.on('connection', (socket) => {
-    socket.join(userRoom(socket.user.id));
-    socket.join(roleRoom(socket.user.role));
+    if (socket.user) {
+      socket.join(userRoom(socket.user.id));
+      socket.join(roleRoom(socket.user.role));
+    }
+
+    socket.on('signup:watch', async ({ email, role } = {}, callback) => {
+      try {
+        const normalizedEmail = String(email || '').trim().toLowerCase();
+        const normalizedRole = String(role || '').trim();
+
+        if (!normalizedEmail || !normalizedRole) {
+          throw new Error('Email and role are required');
+        }
+
+        socket.join(signupRoom(normalizedRole, normalizedEmail));
+        const user = await User.findOne({ email: normalizedEmail, role: normalizedRole }).select('status');
+        const payload = {
+          email: normalizedEmail,
+          role: normalizedRole,
+          status: user?.status || 'not_found',
+          message:
+            user?.status === 'active'
+              ? 'admin verify your request you can login now'
+              : user?.status === 'pending'
+                ? 'Signup request sent to admin for verification. You can login after admin approval.'
+                : '',
+        };
+
+        socket.emit('signup:status', payload);
+
+        if (typeof callback === 'function') {
+          callback({ success: true, ...payload });
+        }
+      } catch (error) {
+        if (typeof callback === 'function') {
+          callback({ success: false, message: error.message });
+        }
+      }
+    });
 
     socket.on('tracking:join', async ({ deliveryId } = {}, callback) => {
       try {
+        if (!socket.user) {
+          throw new Error('Authentication token is required');
+        }
+
         if (!deliveryId) {
           throw new Error('deliveryId is required');
         }
@@ -312,6 +371,37 @@ const emitResourceChanged = (
   });
 };
 
+const emitAccountDeleted = (req, userId) => {
+  const io = req.app.get('io');
+
+  if (!io || !userId) {
+    return;
+  }
+
+  io.to(userRoom(userId)).emit('account:deleted', {
+    message: 'Your account was deleted by admin. Please login again.',
+    userId: userId.toString(),
+    updatedAt: new Date().toISOString(),
+  });
+};
+
+const emitSignupStatus = (req, user, status, message) => {
+  const io = req.app.get('io');
+
+  if (!io || !user?.email || !user?.role) {
+    return;
+  }
+
+  io.to(signupRoom(user.role, user.email)).emit('signup:status', {
+    email: user.email,
+    role: user.role,
+    status,
+    message,
+    userId: user._id?.toString(),
+    updatedAt: new Date().toISOString(),
+  });
+};
+
 module.exports = {
   createRealtimeServer,
   emitDeliveryAssigned,
@@ -319,4 +409,6 @@ module.exports = {
   emitVendorLocation,
   emitResourceChanged,
   emitDeliveryStatus,
+  emitAccountDeleted,
+  emitSignupStatus,
 };

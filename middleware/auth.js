@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const User = require('../models/User');
 
 const getBearerToken = (req) => {
   if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
@@ -19,6 +20,21 @@ const protect = async (req, res, next) => {
 
   try {
     req.user = verifyToken(token);
+
+    if (req.user.id !== 'env-admin') {
+      const user = await User.findById(req.user.id).select('role status');
+
+      if (!user) {
+        return res.status(401).json({ message: 'Account no longer exists. Please login again.' });
+      }
+
+      if (user.status !== 'active') {
+        return res.status(403).json({ message: 'This account is not active. Please login again.' });
+      }
+
+      req.user.role = user.role;
+    }
+
     return next();
   } catch (error) {
     console.error(error);
@@ -35,6 +51,21 @@ const optionalAuth = async (req, res, next) => {
 
   try {
     req.user = verifyToken(token);
+
+    if (req.user.id !== 'env-admin') {
+      const user = await User.findById(req.user.id).select('role status');
+
+      if (!user) {
+        return res.status(401).json({ message: 'Account no longer exists. Please login again.' });
+      }
+
+      if (user.status !== 'active') {
+        return res.status(403).json({ message: 'This account is not active. Please login again.' });
+      }
+
+      req.user.role = user.role;
+    }
+
     return next();
   } catch (error) {
     console.error(error);

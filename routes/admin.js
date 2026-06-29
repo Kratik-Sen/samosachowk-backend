@@ -7,7 +7,7 @@ const Product = require('../models/Product');
 const Wallet = require('../models/Wallet');
 const Delivery = require('../models/Delivery');
 const { protect, authorize } = require('../middleware/auth');
-const { emitResourceChanged } = require('../realtime');
+const { emitAccountDeleted, emitResourceChanged, emitSignupStatus } = require('../realtime');
 
 const adminOnly = [protect, authorize('admin')];
 const manageableRoles = ['vendor', 'sales', 'production', 'delivery'];
@@ -544,6 +544,9 @@ router.put('/users/:id/status', ...adminOnly, async (req, res) => {
       role: updatedUser.role,
       status: updatedUser.status,
     });
+    if (updatedUser.status === 'active') {
+      emitSignupStatus(req, updatedUser, 'active', 'admin verify your request you can login now');
+    }
     emitResourceChanged(req, {
       domains: ['users', 'admin', ...(updatedUser.role === 'vendor' ? ['vendors'] : []), ...(updatedUser.role === 'delivery' ? ['deliveries', 'sales'] : [])],
       action: 'status-updated',
@@ -606,14 +609,22 @@ router.delete('/users/:id', ...adminOnly, async (req, res) => {
       await Wallet.deleteOne({ user: user._id });
     }
 
+    const wasPendingTeamRequest = user.role !== 'vendor' && user.status === 'pending';
+
+    if (wasPendingTeamRequest) {
+      emitSignupStatus(req, user, 'rejected', 'Your signup request was rejected. You can signup again with this email.');
+    }
+
     await User.deleteOne({ _id: user._id });
 
     res.json({ message: 'Credential deleted' });
+    emitAccountDeleted(req, user._id);
     emitResourceChanged(req, {
       domains: ['users', 'admin', 'vendors', 'orders', 'deliveries', 'wallet', 'sales', 'production'],
       action: 'deleted',
       entity: 'user',
       entityId: user._id,
+      audienceUsers: [user._id],
     });
   } catch (error) {
     res.status(500).json({ message: error.message });

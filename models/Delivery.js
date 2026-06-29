@@ -14,7 +14,7 @@ const deliverySchema = mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['Assigned', 'Picked Up', 'In Transit', 'Delivered', 'Failed'],
+      enum: ['Assigned', 'Picked Up', 'In Transit', 'Delivered', 'Failed', 'Rejected'],
       default: 'Assigned',
     },
     payment_collected: {

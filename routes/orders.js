@@ -72,6 +72,7 @@ const populateOrder = (query) =>
     .populate('delivery_boy', 'name phone status availability_status');
 
 const HISTORY_ORDER_STATUSES = ['Delivered', 'Cancelled'];
+const ACTIVE_DELIVERY_STATUSES = ['Assigned', 'Picked Up', 'In Transit'];
 const HISTORY_RETENTION_DAYS = 20;
 const HISTORY_DEFAULT_LIMIT = 8;
 const HISTORY_MAX_LIMIT = 20;
@@ -303,7 +304,18 @@ router.get('/', protect, authorize('sales', 'production', 'delivery', 'admin'), 
     }
 
     const orders = await populateOrder(Order.find(filter).sort('-createdAt'));
-    res.json(orders);
+    const deliveries = await Delivery.find({ order: { $in: orders.map((order) => order._id) } }).lean();
+    const deliveryByOrder = deliveries.reduce((acc, delivery) => {
+      acc[delivery.order.toString()] = delivery;
+      return acc;
+    }, {});
+
+    res.json(
+      orders.map((order) => ({
+        ...order.toObject(),
+        delivery: deliveryByOrder[order._id.toString()],
+      }))
+    );
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -436,6 +448,27 @@ router.put('/:id/assign-delivery', protect, authorize('admin', 'sales', 'deliver
 
     const order = await Order.findById(req.params.id);
     if (order) {
+      const activeDelivery = await Delivery.findOne({
+        delivery_boy: req.body.delivery_boy_id,
+        status: { $in: ACTIVE_DELIVERY_STATUSES },
+        order: { $ne: order._id },
+      }).populate('order', 'customer_name status');
+
+      if (activeDelivery) {
+        return res.status(400).json({
+          message: `${deliveryBoy.name} is already on another delivery. Choose a different delivery boy.`,
+        });
+      }
+
+      const orderActiveDelivery = await Delivery.findOne({
+        order: order._id,
+        status: { $in: ACTIVE_DELIVERY_STATUSES },
+      });
+
+      if (orderActiveDelivery && orderActiveDelivery.delivery_boy.toString() !== req.body.delivery_boy_id) {
+        return res.status(400).json({ message: 'This order is already assigned to another delivery boy.' });
+      }
+
       order.delivery_boy = req.body.delivery_boy_id;
       order.delivery_assigned_at = new Date();
       order.status = 'Out for Delivery';

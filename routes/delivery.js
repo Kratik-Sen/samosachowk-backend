@@ -68,7 +68,7 @@ router.get('/dashboard', protect, authorize('delivery'), async (req, res) => {
     const filter = { delivery_boy: req.user.id };
 
     if (req.query.scope === 'active') {
-      filter.status = { $ne: 'Delivered' };
+      filter.status = { $in: ['Assigned', 'Picked Up', 'In Transit'] };
     }
 
     const deliveries = await populateDelivery(
@@ -146,6 +146,10 @@ router.put('/:id/accept', protect, authorize('delivery'), async (req, res) => {
   try {
     const delivery = await Delivery.findById(req.params.id);
     if (delivery && delivery.delivery_boy.toString() === req.user.id) {
+      if (delivery.status !== 'Assigned') {
+        return res.status(400).json({ message: 'This delivery has already been responded to.' });
+      }
+
       delivery.status = 'Picked Up';
       await delivery.save();
       
@@ -172,6 +176,52 @@ router.put('/:id/accept', protect, authorize('delivery'), async (req, res) => {
     } else {
       res.status(404).json({ message: 'Delivery not found or not assigned to you' });
     }
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// @route   PUT /api/delivery/:id/reject
+// @desc    Reject delivery assignment and return order to sales dispatch
+// @access  Private (Delivery)
+router.put('/:id/reject', protect, authorize('delivery'), async (req, res) => {
+  try {
+    const delivery = await Delivery.findById(req.params.id);
+
+    if (!delivery || delivery.delivery_boy.toString() !== req.user.id) {
+      return res.status(404).json({ message: 'Delivery not found or not assigned to you' });
+    }
+
+    if (delivery.status !== 'Assigned') {
+      return res.status(400).json({ message: 'Only newly assigned deliveries can be rejected.' });
+    }
+
+    delivery.status = 'Rejected';
+    delivery.notes = req.body.notes || 'Delivery boy rejected this assignment.';
+    await delivery.save();
+
+    const order = await Order.findById(delivery.order);
+
+    if (order) {
+      order.status = 'Ready';
+      order.delivery_boy = undefined;
+      order.delivery_assigned_at = undefined;
+      addStatusUpdate(order, 'Ready', 'Delivery boy rejected this run. Sales must assign another delivery boy.', req.user.id);
+      await order.save();
+    }
+
+    const trackedDelivery = await Delivery.findById(delivery._id).populate('order', 'user status');
+    emitDeliveryStatus(req, trackedDelivery);
+    emitResourceChanged(req, {
+      domains: ['deliveries', 'orders', 'sales', 'production', 'admin', 'vendors'],
+      action: 'rejected',
+      entity: 'delivery',
+      entityId: delivery._id,
+      audienceUsers: [order?.user, delivery.delivery_boy],
+      audienceRoles: ['admin', 'sales', 'production'],
+    });
+
+    res.json({ message: 'Delivery rejected. Sales can assign another delivery boy.', delivery });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
