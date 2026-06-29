@@ -7,9 +7,17 @@ const Vendor = require('../models/Vendor');
 const Wallet = require('../models/Wallet');
 const { emitResourceChanged } = require('../realtime');
 
+const requireEnv = (value, name) => {
+  if (!value) {
+    throw new Error(`${name} is required in server .env`);
+  }
+
+  return value;
+};
+
 // Generate JWT
 const generateToken = (id, role) => {
-  return jwt.sign({ id, role }, process.env.JWT_SECRET, {
+  return jwt.sign({ id, role }, requireEnv(process.env.JWT_SECRET, 'JWT_SECRET'), {
     expiresIn: '30d',
   });
 };
@@ -34,12 +42,17 @@ const getVendorProfileState = async (userId) => {
 const hashOtp = (otp) =>
   crypto
     .createHash('sha256')
-    .update(`${otp}:${process.env.JWT_SECRET || 'samosa-chowk'}`)
+    .update(`${otp}:${requireEnv(process.env.JWT_SECRET, 'JWT_SECRET')}`)
     .digest('hex');
 
 const getOtpExpiryMinutes = () => {
-  const expiryMinutes = Number(process.env.OTP_EXPIRY_MINUTES || 10);
-  return Number.isFinite(expiryMinutes) && expiryMinutes > 0 ? expiryMinutes : 10;
+  const expiryMinutes = Number(requireEnv(process.env.OTP_EXPIRY_MINUTES, 'OTP_EXPIRY_MINUTES'));
+
+  if (!Number.isFinite(expiryMinutes) || expiryMinutes <= 0) {
+    throw new Error('OTP_EXPIRY_MINUTES must be a positive number in server .env');
+  }
+
+  return expiryMinutes;
 };
 
 const getOtpExpiry = () => {
@@ -119,7 +132,7 @@ const sendEmailOtp = async ({ email, name, otp, purpose = 'vendor signup' }) => 
 };
 
 const formatMsg91WhatsAppRecipient = (phone) => {
-  const countryCode = String(process.env.MSG91_DEFAULT_COUNTRY_CODE || '91').replace(/\D/g, '');
+  const countryCode = String(requireEnv(process.env.MSG91_DEFAULT_COUNTRY_CODE, 'MSG91_DEFAULT_COUNTRY_CODE')).replace(/\D/g, '');
   let digits = String(phone || '').replace(/\D/g, '').replace(/^0+/, '');
 
   if (digits.length === 10 && countryCode) {
@@ -140,12 +153,12 @@ const sendWhatsAppOtp = async ({ phone, otp }) => {
   const integratedNumber = process.env.MSG91_WHATSAPP_INTEGRATED_NUMBER;
   const templateName = process.env.MSG91_WHATSAPP_OTP_TEMPLATE_NAME;
   const namespace = process.env.MSG91_WHATSAPP_OTP_TEMPLATE_NAMESPACE;
-  const language = process.env.MSG91_WHATSAPP_OTP_LANGUAGE || 'en';
-  const componentKey = process.env.MSG91_WHATSAPP_OTP_COMPONENT_KEY || 'body_1';
+  const language = requireEnv(process.env.MSG91_WHATSAPP_OTP_LANGUAGE, 'MSG91_WHATSAPP_OTP_LANGUAGE');
+  const componentKey = requireEnv(process.env.MSG91_WHATSAPP_OTP_COMPONENT_KEY, 'MSG91_WHATSAPP_OTP_COMPONENT_KEY');
   const buttonKey = process.env.MSG91_WHATSAPP_OTP_BUTTON_KEY;
-  const buttonType = process.env.MSG91_WHATSAPP_OTP_BUTTON_TYPE || 'text';
+  const buttonType = requireEnv(process.env.MSG91_WHATSAPP_OTP_BUTTON_TYPE, 'MSG91_WHATSAPP_OTP_BUTTON_TYPE');
   const buttonSubtype = process.env.MSG91_WHATSAPP_OTP_BUTTON_SUBTYPE;
-  const buttonValueTemplate = process.env.MSG91_WHATSAPP_OTP_BUTTON_VALUE || '{{otp}}';
+  const buttonValueTemplate = requireEnv(process.env.MSG91_WHATSAPP_OTP_BUTTON_VALUE, 'MSG91_WHATSAPP_OTP_BUTTON_VALUE');
   const recipient = formatMsg91WhatsAppRecipient(phone);
 
   if (!authkey || !integratedNumber || !templateName) {
@@ -597,7 +610,7 @@ router.post('/login', async (req, res) => {
 
       return res.json({
         _id: 'env-admin',
-        name: process.env.ADMIN_NAME || 'Samosa Chowk Admin',
+        name: requireEnv(process.env.ADMIN_NAME, 'ADMIN_NAME'),
         email: adminEmail,
         phone: '',
         role: 'admin',

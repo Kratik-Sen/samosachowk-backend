@@ -138,8 +138,12 @@ const verifyRazorpaySignature = ({ razorpay_order_id, payment_id, razorpay_signa
     return false;
   }
 
+  if (!process.env.RAZORPAY_KEY_SECRET) {
+    throw new Error('Razorpay key secret is not configured on the server');
+  }
+
   const expectedSignature = crypto
-    .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET || '')
+    .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
     .update(`${razorpay_order_id}|${payment_id}`)
     .digest('hex');
 

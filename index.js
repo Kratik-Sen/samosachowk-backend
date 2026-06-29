@@ -41,7 +41,11 @@ app.use('/api/products', require('./routes/products'));
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/config', require('./routes/config'));
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT;
+
+if (!PORT) {
+  throw new Error('PORT is required in server .env');
+}
 
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);

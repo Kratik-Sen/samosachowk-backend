@@ -7,7 +7,7 @@ const router = express.Router();
 router.get('/public', (req, res) => {
   res.json({
     googleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY || '',
-    googleMapsMapId: process.env.GOOGLE_MAPS_MAP_ID || 'DEMO_MAP_ID',
+    googleMapsMapId: process.env.GOOGLE_MAPS_MAP_ID || '',
     razorpayKeyId: process.env.RAZORPAY_KEY_ID || '',
   });
 });
