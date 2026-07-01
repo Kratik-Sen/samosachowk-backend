@@ -11,7 +11,7 @@ const { emitResourceChanged, emitVendorLocation } = require('../realtime');
 const ACTIVE_ORDER_STATUSES = ['Pending', 'Verified', 'In Production', 'Ready', 'Out for Delivery'];
 
 const formatCoordinate = (value) => Number(value).toFixed(5);
-const requiredProfileFields = ['name', 'phone', 'store_name', 'address', 'city', 'state', 'zip'];
+const requiredProfileFields = ['name', 'store_name', 'address', 'city', 'state', 'zip'];
 
 const cleanText = (value) => String(value || '').trim();
 
@@ -20,6 +20,7 @@ const normalizeProfilePayload = (body) => {
 
   return {
     name: cleanText(body?.name),
+    email: cleanText(body?.email).toLowerCase(),
     phone: cleanText(body?.phone),
     store_name: cleanText(body?.store_name),
     owner_name: cleanText(body?.owner_name || body?.name),
@@ -253,6 +254,17 @@ router.put('/profile', protect, authorize('vendor'), async (req, res) => {
 
     user.name = profile.name;
     user.phone = profile.phone;
+
+    if (profile.email && profile.email !== user.email) {
+      const duplicate = await User.findOne({ email: profile.email, _id: { $ne: user._id } });
+
+      if (duplicate) {
+        return res.status(400).json({ message: 'This email is already registered' });
+      }
+
+      user.email = profile.email;
+    }
+
     await user.save();
 
     vendor.store_name = profile.store_name;

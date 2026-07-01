@@ -5,6 +5,7 @@ const Delivery = require('../models/Delivery');
 const Order = require('../models/Order');
 const User = require('../models/User');
 const { emitDeliveryLocation, emitDeliveryStatus, emitResourceChanged } = require('../realtime');
+const { rejectExpiredDelivery, rejectExpiredAssignments } = require('../utils/deliveryAssignmentTimeouts');
 
 const DELIVERY_CLOSE_DISTANCE_KM = 0.7;
 const DELIVERY_CLOSE_DISTANCE_TEXT = '0.7 km';
@@ -65,6 +66,8 @@ const addStatusUpdate = (order, status, note, userId) => {
 // @access  Private (Delivery)
 router.get('/dashboard', protect, authorize('delivery'), async (req, res) => {
   try {
+    await rejectExpiredAssignments(req, { delivery_boy: req.user.id });
+
     const filter = { delivery_boy: req.user.id };
 
     if (req.query.scope === 'active') {
@@ -159,11 +162,17 @@ router.put('/:id/accept', protect, authorize('delivery'), async (req, res) => {
   try {
     const delivery = await Delivery.findById(req.params.id);
     if (delivery && delivery.delivery_boy.toString() === req.user.id) {
+      const expiredDelivery = await rejectExpiredDelivery(req, delivery, req.user.id);
+      if (expiredDelivery) {
+        return res.status(400).json({ message: 'This delivery request expired after 1 minute and was automatically rejected.' });
+      }
+
       if (delivery.status !== 'Assigned') {
         return res.status(400).json({ message: 'This delivery has already been responded to.' });
       }
 
       delivery.status = 'Picked Up';
+      delivery.responded_at = new Date();
       await delivery.save();
       
       // Update order status as well
@@ -207,11 +216,17 @@ router.put('/:id/reject', protect, authorize('delivery'), async (req, res) => {
       return res.status(404).json({ message: 'Delivery not found or not assigned to you' });
     }
 
+    const expiredDelivery = await rejectExpiredDelivery(req, delivery, req.user.id);
+    if (expiredDelivery) {
+      return res.json({ message: 'Delivery request expired and was automatically rejected.', delivery: expiredDelivery });
+    }
+
     if (delivery.status !== 'Assigned') {
       return res.status(400).json({ message: 'Only newly assigned deliveries can be rejected.' });
     }
 
     delivery.status = 'Rejected';
+    delivery.responded_at = new Date();
     delivery.notes = req.body.notes || 'Delivery boy rejected this assignment.';
     await delivery.save();
 

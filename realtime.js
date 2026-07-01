@@ -286,6 +286,7 @@ const emitDeliveryAssigned = async (req, deliveryId) => {
     vendor_phone: getUserPhone(delivery.order.user) || delivery.order.customer_phone || '',
     current_location: serializeLocation(delivery.current_location),
     vendor_location: serializeLocation(delivery.order.delivery_address),
+    assigned_expires_at: delivery.assigned_expires_at,
     updatedAt: new Date().toISOString(),
   };
 
@@ -310,6 +311,8 @@ const emitDeliveryStatus = (req, delivery) => {
     orderStatus: order?.status,
     customer_name: order?.customer_name,
     delivery_boy_name: delivery.delivery_boy?.name,
+    assigned_expires_at: delivery.assigned_expires_at,
+    responded_at: delivery.responded_at,
   };
 
   io.to(deliveryRoom(delivery._id)).emit('delivery:status', payload);

@@ -24,9 +24,53 @@ const generateToken = (id, role) => {
 
 const vendorVerificationMethods = ['email', 'whatsapp'];
 const selfSignupRoles = ['sales', 'production', 'delivery'];
+const WHATSAPP_EMAIL_DOMAIN = 'whatsapp.samosachowk.in';
 
-const normalizeEmail = (email) => String(email || '').trim().toLowerCase();
-const normalizePhone = (phone) => String(phone || '').trim();
+const normalizeEmail = (email) => String(email || '').trim().toLowerCase() || undefined;
+const normalizePhone = (phone) => {
+  const raw = String(phone || '').trim();
+  const digits = raw.replace(/\D/g, '').replace(/^0+/, '');
+
+  if (!digits) {
+    return '';
+  }
+
+  if (digits.length === 10) {
+    return `+91${digits}`;
+  }
+
+  if (digits.length === 12 && digits.startsWith('91')) {
+    return `+${digits}`;
+  }
+
+  return raw.startsWith('+') ? raw : `+${digits}`;
+};
+
+const normalizeCredential = (credential) => String(credential || '').trim();
+const buildWhatsAppPlaceholderEmail = (phone) => {
+  const digits = String(phone || '').replace(/\D/g, '');
+  return digits ? `wa-${digits}@${WHATSAPP_EMAIL_DOMAIN}` : undefined;
+};
+
+const findUserByCredential = async (credential, role, selectPassword = false) => {
+  const normalizedCredential = normalizeCredential(credential);
+  const normalizedEmail = normalizedCredential.includes('@') ? normalizeEmail(normalizedCredential) : undefined;
+  const normalizedPhone = normalizePhone(normalizedCredential);
+  const query = {
+    ...(role ? { role } : {}),
+    $or: [
+      ...(normalizedEmail ? [{ email: normalizedEmail }] : []),
+      ...(normalizedPhone ? [{ phone: normalizedPhone }] : []),
+    ],
+  };
+
+  if (!query.$or.length) {
+    return null;
+  }
+
+  const userQuery = User.findOne(query);
+  return selectPassword ? userQuery.select('+password') : userQuery;
+};
 
 const generateOtp = () => crypto.randomInt(100000, 1000000).toString();
 
@@ -331,32 +375,48 @@ const registerVendor = async (req, res) => {
     ? req.body.verificationMethod
     : '';
 
-  if (!name || !email || !phone || !password) {
-    return res.status(400).json({ message: 'Name, email, mobile number, and password are required for vendor signup' });
+  if (!name || !password) {
+    return res.status(400).json({ message: 'Name and password are required for vendor signup' });
   }
 
   if (!verificationMethod) {
     return res.status(400).json({ message: 'Select email or WhatsApp for OTP verification' });
   }
 
+  if (verificationMethod === 'email' && !email) {
+    return res.status(400).json({ message: 'Email is required for email OTP verification' });
+  }
+
+  if (verificationMethod === 'whatsapp' && !phone) {
+    return res.status(400).json({ message: 'WhatsApp mobile number is required for OTP verification' });
+  }
+
   if (password.length < 6) {
     return res.status(400).json({ message: 'Password must be at least 6 characters' });
   }
 
-  const existingUser = await User.findOne({ email }).select('+password');
+  const existingUser = await User.findOne(
+    verificationMethod === 'email'
+      ? { email }
+      : { phone, role: 'vendor' }
+  ).select('+password');
 
   if (existingUser && (existingUser.role !== 'vendor' || existingUser.status !== 'pending' || existingUser.otpVerifiedAt)) {
-    return res.status(400).json({ message: 'This email is already registered' });
+    return res.status(400).json({
+      message: verificationMethod === 'email' ? 'This email is already registered' : 'This WhatsApp number is already registered',
+    });
   }
 
   const otp = generateOtp();
   await sendVendorOtp({ verificationMethod, email, phone, name, otp });
+  const accountEmail = email || buildWhatsAppPlaceholderEmail(phone);
 
   let user = existingUser;
   const otpFields = buildOtpFields(otp, verificationMethod);
 
   if (user) {
     user.name = name;
+    user.email = accountEmail;
     user.phone = phone;
     user.password = password;
     user.status = 'pending';
@@ -366,7 +426,7 @@ const registerVendor = async (req, res) => {
   } else {
     user = await User.create({
       name,
-      email,
+      email: accountEmail,
       phone,
       password,
       role: 'vendor',
@@ -461,13 +521,20 @@ router.post('/register', async (req, res) => {
 router.post('/vendor/verify-otp', async (req, res) => {
   try {
     const email = normalizeEmail(req.body.email);
+    const phone = normalizePhone(req.body.phone);
     const otp = String(req.body.otp || '').trim();
 
-    if (!email || !otp) {
-      return res.status(400).json({ message: 'Email and OTP are required' });
+    if ((!email && !phone) || !otp) {
+      return res.status(400).json({ message: 'Selected contact and OTP are required' });
     }
 
-    const user = await User.findOne({ email, role: 'vendor' });
+    const user = await User.findOne({
+      role: 'vendor',
+      $or: [
+        ...(email ? [{ email }] : []),
+        ...(phone ? [{ phone }] : []),
+      ],
+    });
 
     if (!user) {
       return res.status(404).json({ message: 'Vendor signup request not found' });
@@ -495,6 +562,8 @@ router.post('/vendor/verify-otp', async (req, res) => {
       return res.status(400).json({ message: 'Invalid OTP' });
     }
 
+    const verifiedMethod = user.otpVerificationMethod;
+
     user.status = 'active';
     user.otpVerifiedAt = new Date();
     clearOtpFields(user);
@@ -508,8 +577,9 @@ router.post('/vendor/verify-otp', async (req, res) => {
       phone: user.phone,
       role: user.role,
       status: user.status,
+      verificationMethod: verifiedMethod,
       ...(await getVendorProfileState(user._id)),
-      message: 'Vendor account verified. Login to complete your outlet details.',
+      message: `Vendor account verified. Login with ${verifiedMethod === 'whatsapp' ? 'phone' : 'email'} to complete your outlet details.`,
     });
     emitResourceChanged(req, {
       domains: ['users', 'vendors', 'wallet', 'admin', 'sales'],
@@ -528,22 +598,29 @@ router.post('/vendor/verify-otp', async (req, res) => {
 router.post('/vendor/resend-otp', async (req, res) => {
   try {
     const email = normalizeEmail(req.body.email);
+    const requestPhone = normalizePhone(req.body.phone);
     const requestedMethod = vendorVerificationMethods.includes(req.body.verificationMethod)
       ? req.body.verificationMethod
       : '';
 
-    if (!email) {
-      return res.status(400).json({ message: 'Email is required' });
+    if (!email && !requestPhone) {
+      return res.status(400).json({ message: 'Selected contact is required' });
     }
 
-    const user = await User.findOne({ email, role: 'vendor' }).select('+password');
+    const user = await User.findOne({
+      role: 'vendor',
+      $or: [
+        ...(email ? [{ email }] : []),
+        ...(requestPhone ? [{ phone: requestPhone }] : []),
+      ],
+    }).select('+password');
 
     if (!user || user.status !== 'pending' || user.otpVerifiedAt) {
       return res.status(404).json({ message: 'Pending vendor signup request not found' });
     }
 
     const verificationMethod = requestedMethod || user.otpVerificationMethod || 'email';
-    const phone = normalizePhone(req.body.phone || user.phone);
+    const phone = requestPhone || normalizePhone(user.phone);
 
     if (verificationMethod === 'whatsapp' && !phone) {
       return res.status(400).json({ message: 'Vendor mobile number is required for WhatsApp OTP' });
@@ -586,14 +663,15 @@ router.post('/vendor/resend-otp', async (req, res) => {
 router.post('/login', async (req, res) => {
   try {
     const { email, password, role } = req.body;
+    const credential = normalizeCredential(email);
     const normalizedEmail = normalizeEmail(email);
 
     if (!role) {
       return res.status(400).json({ message: 'Select a login role first' });
     }
 
-    if (!normalizedEmail || !password) {
-      return res.status(400).json({ message: 'Email and password are required' });
+    if (!credential || !password) {
+      return res.status(400).json({ message: 'Email or phone and password are required' });
     }
 
     if (role === 'admin') {
@@ -620,7 +698,7 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    const user = await User.findOne({ email: normalizedEmail }).select('+password');
+    const user = await findUserByCredential(credential, role, true);
 
     if (user && (await user.matchPassword(password))) {
       if (user.role !== role) {
@@ -656,7 +734,7 @@ router.post('/login', async (req, res) => {
         token: generateToken(user._id, user.role),
       });
     } else {
-      res.status(401).json({ message: 'Invalid email or password' });
+      res.status(401).json({ message: 'Invalid email/phone or password' });
     }
   } catch (error) {
     res.status(500).json({ message: error.message });

@@ -26,6 +26,8 @@ const deliverySchema = mongoose.Schema(
       default: 0,
     },
     notes: String,
+    assigned_expires_at: Date,
+    responded_at: Date,
     current_location: {
       lat: Number,
       lng: Number,

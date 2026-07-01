@@ -8,6 +8,7 @@ const Delivery = require('../models/Delivery');
 const User = require('../models/User');
 const Wallet = require('../models/Wallet');
 const { emitDeliveryAssigned, emitResourceChanged } = require('../realtime');
+const { getAssignmentExpiry, rejectExpiredAssignments } = require('../utils/deliveryAssignmentTimeouts');
 
 const normalizePaymentMethod = (method) => {
   const value = String(method || 'COD').toUpperCase();
@@ -297,6 +298,8 @@ router.post('/', optionalAuth, async (req, res) => {
 // @access  Private (Sales/Production/Delivery/Admin)
 router.get('/', protect, authorize('sales', 'production', 'delivery', 'admin'), async (req, res) => {
   try {
+    await rejectExpiredAssignments(req);
+
     const filter = {};
 
     if (req.query.status) {
@@ -435,6 +438,8 @@ router.put('/:id/verify', protect, authorize('sales', 'admin'), async (req, res)
 // @access  Private (Admin/Sales/Delivery)
 router.put('/:id/assign-delivery', protect, authorize('admin', 'sales', 'delivery'), async (req, res) => {
   try {
+    await rejectExpiredAssignments(req, { order: req.params.id });
+
     const deliveryBoy = await User.findOne({
       _id: req.body.delivery_boy_id,
       role: 'delivery',
@@ -482,6 +487,8 @@ router.put('/:id/assign-delivery', protect, authorize('admin', 'sales', 'deliver
           delivery_boy: req.body.delivery_boy_id,
           status: 'Assigned',
           notes: req.body.notes,
+          assigned_expires_at: getAssignmentExpiry(),
+          responded_at: null,
         },
         { upsert: true, new: true, setDefaultsOnInsert: true }
       );
