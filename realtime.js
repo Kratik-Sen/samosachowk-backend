@@ -270,7 +270,7 @@ const emitDeliveryAssigned = async (req, deliveryId) => {
     return;
   }
 
-  const delivery = await Delivery.findById(deliveryId).populate('order', 'user delivery_address status');
+  const delivery = await Delivery.findById(deliveryId).populate('order', 'user customer_name customer_phone delivery_address status');
 
   if (!delivery || !delivery.order) {
     return;
@@ -290,11 +290,6 @@ const emitDeliveryAssigned = async (req, deliveryId) => {
   };
 
   io.to(userRoom(delivery.delivery_boy)).emit('delivery:assigned', payload);
-  const vendorUserId = toIdString(delivery.order.user);
-
-  if (vendorUserId) {
-    io.to(userRoom(vendorUserId)).emit('delivery:assigned', payload);
-  }
 };
 
 const emitDeliveryStatus = (req, delivery) => {
@@ -313,6 +308,8 @@ const emitDeliveryStatus = (req, delivery) => {
     orderId: orderId?.toString(),
     status: delivery.status,
     orderStatus: order?.status,
+    customer_name: order?.customer_name,
+    delivery_boy_name: delivery.delivery_boy?.name,
   };
 
   io.to(deliveryRoom(delivery._id)).emit('delivery:status', payload);

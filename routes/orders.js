@@ -471,8 +471,8 @@ router.put('/:id/assign-delivery', protect, authorize('admin', 'sales', 'deliver
 
       order.delivery_boy = req.body.delivery_boy_id;
       order.delivery_assigned_at = new Date();
-      order.status = 'Out for Delivery';
-      addStatusUpdate(order, 'Out for Delivery', req.body.notes || `Assigned to ${deliveryBoy.name}.`, req.user.id);
+      order.status = 'Ready';
+      addStatusUpdate(order, 'Ready', req.body.notes || `Delivery request sent to ${deliveryBoy.name}.`, req.user.id);
       const updatedOrder = await order.save();
 
       const delivery = await Delivery.findOneAndUpdate(

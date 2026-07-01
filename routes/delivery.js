@@ -121,6 +121,19 @@ router.put('/availability', protect, authorize('delivery'), async (req, res) => 
       return res.status(400).json({ message: 'Only active delivery accounts can be available for assignment' });
     }
 
+    if (nextStatus === 'inactive') {
+      const activeRun = await Delivery.findOne({
+        delivery_boy: req.user.id,
+        status: { $in: ['Picked Up', 'In Transit'] },
+      }).populate('order', 'customer_name');
+
+      if (activeRun) {
+        return res.status(400).json({
+          message: 'you can not inactivate until you delivered your assign order',
+        });
+      }
+    }
+
     user.availability_status = nextStatus;
     await user.save();
 
@@ -161,7 +174,9 @@ router.put('/:id/accept', protect, authorize('delivery'), async (req, res) => {
         await order.save();
       }
 
-      const trackedDelivery = await Delivery.findById(delivery._id).populate('order', 'user status');
+      const trackedDelivery = await Delivery.findById(delivery._id)
+        .populate('order', 'user status customer_name')
+        .populate('delivery_boy', 'name');
       emitDeliveryStatus(req, trackedDelivery);
       emitResourceChanged(req, {
         domains: ['deliveries', 'orders', 'sales', 'production', 'admin', 'vendors'],
@@ -210,7 +225,9 @@ router.put('/:id/reject', protect, authorize('delivery'), async (req, res) => {
       await order.save();
     }
 
-    const trackedDelivery = await Delivery.findById(delivery._id).populate('order', 'user status');
+    const trackedDelivery = await Delivery.findById(delivery._id)
+      .populate('order', 'user status customer_name')
+      .populate('delivery_boy', 'name');
     emitDeliveryStatus(req, trackedDelivery);
     emitResourceChanged(req, {
       domains: ['deliveries', 'orders', 'sales', 'production', 'admin', 'vendors'],
@@ -273,7 +290,9 @@ router.put('/:id/delivered', protect, authorize('delivery'), async (req, res) =>
       }
       await order.save();
 
-      const trackedDelivery = await Delivery.findById(delivery._id).populate('order', 'user status');
+      const trackedDelivery = await Delivery.findById(delivery._id)
+        .populate('order', 'user status customer_name')
+        .populate('delivery_boy', 'name');
       emitDeliveryStatus(req, trackedDelivery);
       emitResourceChanged(req, {
         domains: ['deliveries', 'orders', 'sales', 'production', 'admin', 'vendors', 'wallet'],
