@@ -301,8 +301,8 @@ const emitDeliveryStatus = (req, delivery) => {
 
   const order = delivery.order;
   const orderId = order?._id || order;
-  const vendorUserId = order?.user;
-  const deliveryBoyId = delivery.delivery_boy;
+  const vendorUserId = toIdString(order?.user);
+  const deliveryBoyId = toIdString(delivery.delivery_boy);
   const payload = {
     deliveryId: delivery._id.toString(),
     orderId: orderId?.toString(),
@@ -313,6 +313,7 @@ const emitDeliveryStatus = (req, delivery) => {
   };
 
   io.to(deliveryRoom(delivery._id)).emit('delivery:status', payload);
+  io.to(roleRoom('sales')).emit('delivery:status', payload);
 
   if (vendorUserId) {
     io.to(userRoom(vendorUserId)).emit('delivery:status', payload);
