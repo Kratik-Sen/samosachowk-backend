@@ -313,6 +313,8 @@ const emitDeliveryStatus = (req, delivery) => {
     delivery_boy_name: delivery.delivery_boy?.name,
     assigned_expires_at: delivery.assigned_expires_at,
     responded_at: delivery.responded_at,
+    notes: delivery.notes,
+    auto_rejected: delivery.status === 'Rejected' && /automatically rejected|did not respond|expired/i.test(delivery.notes || ''),
   };
 
   io.to(deliveryRoom(delivery._id)).emit('delivery:status', payload);
