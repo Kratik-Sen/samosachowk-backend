@@ -20,6 +20,7 @@ const orderSchema = mongoose.Schema(
         quantity: { type: Number, required: true },
         price: { type: Number, required: true },
         selectedPack: { type: String },
+        reward_coins: { type: Number, default: 0 },
         product: {
           type: mongoose.Schema.Types.ObjectId,
           ref: 'Product',
@@ -74,6 +75,11 @@ const orderSchema = mongoose.Schema(
       ref: 'User',
     },
     delivery_assigned_at: Date,
+    reward_points_awarded: {
+      type: Number,
+      default: 0,
+    },
+    reward_points_awarded_at: Date,
     delivery_address: {
       location: String,
       lat: Number,

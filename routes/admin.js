@@ -293,7 +293,7 @@ router.put('/rewards/:requestId', ...adminOnly, async (req, res) => {
     }
 
     if (nextStatus === 'verified' && wallet.reward_points < request.points) {
-      return res.status(400).json({ message: 'Vendor no longer has enough points for this redemption' });
+      return res.status(400).json({ message: 'Vendor no longer has enough coins for this redemption' });
     }
 
     request.status = nextStatus;
@@ -306,11 +306,11 @@ router.put('/rewards/:requestId', ...adminOnly, async (req, res) => {
     if (nextStatus === 'verified') {
       wallet.reward_points -= request.points;
       wallet.transactions.unshift({
-        title: 'Admin verified redeem points',
+        title: 'Admin verified redeem coins',
         type: 'redemption',
         points: request.points,
         status: 'completed',
-        notes: request.reward_note || 'Admin verified redeem points.',
+        notes: request.reward_note || 'Admin verified redeem coins.',
       });
     } else {
       wallet.transactions.unshift({
@@ -409,18 +409,7 @@ router.post('/users', ...adminOnly, async (req, res) => {
         auto_approved: true,
       });
 
-      await Wallet.create({
-        user: user._id,
-        transactions: [
-          {
-            title: 'Vendor account activated',
-            type: 'reward',
-            points: 100,
-            notes: 'Admin-created vendor credential',
-          },
-        ],
-        reward_points: 100,
-      });
+      await Wallet.create({ user: user._id });
     }
 
     res.status(201).json({

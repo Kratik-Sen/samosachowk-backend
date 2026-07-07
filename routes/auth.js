@@ -368,18 +368,7 @@ const ensureVendorAccountBundle = async (user) => {
   const existingWallet = await Wallet.findOne({ user: user._id });
 
   if (!existingWallet) {
-    await Wallet.create({
-      user: user._id,
-      transactions: [
-        {
-          title: 'Vendor account activated',
-          type: 'reward',
-          points: 100,
-          notes: 'OTP-verified vendor signup',
-        },
-      ],
-      reward_points: 100,
-    });
+    await Wallet.create({ user: user._id });
   }
 };
 

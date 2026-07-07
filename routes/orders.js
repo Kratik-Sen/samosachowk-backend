@@ -6,8 +6,8 @@ const { protect, optionalAuth, authorize } = require('../middleware/auth');
 const Order = require('../models/Order');
 const Delivery = require('../models/Delivery');
 const User = require('../models/User');
-const Wallet = require('../models/Wallet');
 const { emitDeliveryAssigned, emitResourceChanged } = require('../realtime');
+const { attachRewardCoinsToItems } = require('../utils/rewards');
 
 const normalizePaymentMethod = (method) => {
   const value = String(method || 'COD').toUpperCase();
@@ -21,35 +21,6 @@ const normalizePaymentMethod = (method) => {
 
 const roundMoney = (value) => Math.round(Number(value || 0) * 100) / 100;
 
-const awardOrderRewards = async ({ userId, userRole, items, orderId }) => {
-  if (!userId || userRole !== 'vendor') {
-    return null;
-  }
-
-  const pointsAwarded = (items || []).reduce((sum, item) => sum + Math.max(0, Number(item.quantity || 0)), 0);
-
-  if (!pointsAwarded) {
-    return null;
-  }
-
-  let wallet = await Wallet.findOne({ user: userId });
-
-  if (!wallet) {
-    wallet = await Wallet.create({ user: userId });
-  }
-
-  wallet.reward_points += pointsAwarded;
-  wallet.transactions.unshift({
-    title: 'Order reward coins',
-    type: 'reward',
-    points: pointsAwarded,
-    notes: `Reward for ${pointsAwarded} ordered pieces. Order ${orderId?.toString().slice(-6).toUpperCase()}.`,
-  });
-
-  await wallet.save();
-  return { wallet, pointsAwarded };
-};
-
 const addStatusUpdate = (order, status, note, userId) => {
   order.status_updates.push({
     status,
@@ -61,7 +32,7 @@ const addStatusUpdate = (order, status, note, userId) => {
 const populateOrder = (query) =>
   query
     .populate('user', 'name email phone role')
-    .populate('items.product', 'name category image price status packages')
+    .populate('items.product', 'name category image price status packages reward_coins')
     .populate('delivery_boy', 'name phone status availability_status');
 
 const HISTORY_ORDER_STATUSES = ['Delivered', 'Cancelled'];
@@ -224,6 +195,7 @@ router.post('/', optionalAuth, async (req, res) => {
     const normalizedFinalAmount = roundMoney(
       final_amount || normalizedTotalAmount + normalizedGstAmount - normalizedDiscountAmount
     );
+    const orderItems = await attachRewardCoinsToItems(items || []);
 
     const order = await Order.create({
       user: req.user ? req.user.id : null,
@@ -259,31 +231,15 @@ router.post('/', optionalAuth, async (req, res) => {
       ],
     });
 
-    const rewardResult = await awardOrderRewards({
-      userId: order.user,
-      userRole: req.user?.role,
-      items,
-      orderId: order._id,
-    });
-
     res.status(201).json(order);
     emitResourceChanged(req, {
-      domains: ['orders', 'sales', 'admin', 'vendors', ...(rewardResult?.pointsAwarded ? ['wallet', 'rewards'] : [])],
+      domains: ['orders', 'sales', 'admin', 'vendors'],
       action: 'created',
       entity: 'order',
       entityId: order._id,
       audienceUsers: [order.user],
       audienceRoles: ['admin', 'sales'],
     });
-    if (rewardResult?.pointsAwarded) {
-      emitResourceChanged(req, {
-        domains: ['wallet', 'vendors', 'rewards'],
-        action: 'earned',
-        entity: 'reward',
-        entityId: rewardResult.wallet._id,
-        audienceUsers: [order.user],
-      });
-    }
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

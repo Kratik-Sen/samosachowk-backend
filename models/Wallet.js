@@ -51,6 +51,10 @@ const walletSchema = mongoose.Schema(
         },
         amount: { type: Number, default: 0 },
         points: { type: Number, default: 0 },
+        order: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'Order',
+        },
         status: {
           type: String,
           enum: ['pending', 'completed', 'failed'],

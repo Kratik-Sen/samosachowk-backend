@@ -103,7 +103,7 @@ router.get('/dashboard', protect, authorize('vendor', 'customer'), async (req, r
     const orders = await Order.find({ user: req.user.id, status: { $in: ACTIVE_ORDER_STATUSES } })
       .sort('-createdAt')
       .limit(5)
-      .populate('items.product', 'name category image price status packages');
+      .populate('items.product', 'name category image price status packages reward_coins');
     const wallet = await Wallet.findOne({ user: req.user.id });
     
     // Calculate total spent
@@ -140,7 +140,7 @@ router.get('/orders', protect, authorize('vendor', 'customer'), async (req, res)
 
     const orders = await Order.find(filter)
       .sort('-createdAt')
-      .populate('items.product', 'name category image price status packages')
+      .populate('items.product', 'name category image price status packages reward_coins')
       .populate('delivery_boy', 'name phone status');
     const deliveries = await Delivery.find({ order: { $in: orders.map((order) => order._id) } });
     const deliveryByOrder = deliveries.reduce((acc, delivery) => {

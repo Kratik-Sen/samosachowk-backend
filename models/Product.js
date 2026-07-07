@@ -35,6 +35,11 @@ const productSchema = mongoose.Schema(
       type: Number,
       default: 0,
     },
+    reward_coins: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     status: {
       type: String,
       enum: ['Active', 'Inactive'],

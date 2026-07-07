@@ -55,6 +55,7 @@ const buildProductPayload = (body) => ({
   stock: Number(body.stock || 0),
   gst_rate: Number(body.gst_rate || 0),
   discount_rate: Number(body.discount_rate || 0),
+  reward_coins: Math.max(0, Math.floor(Number(body.reward_coins || 0))),
   status: body.status || 'Active',
 });
 

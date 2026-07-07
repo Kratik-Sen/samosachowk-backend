@@ -24,7 +24,7 @@ router.get('/', protect, async (req, res) => {
 });
 
 // @route   POST /api/wallet/redeem
-// @desc    Request reward point redemption for admin review
+// @desc    Request reward coin redemption for admin review
 // @access  Private (Vendor)
 router.post('/redeem', protect, authorize('vendor'), async (req, res) => {
   try {
@@ -32,7 +32,7 @@ router.post('/redeem', protect, authorize('vendor'), async (req, res) => {
     const redeemPoints = Number(points || REDEEM_MIN_POINTS);
 
     if (redeemPoints < REDEEM_MIN_POINTS) {
-      return res.status(400).json({ message: `Collect ${REDEEM_MIN_POINTS} reward points before redeeming` });
+      return res.status(400).json({ message: `Collect ${REDEEM_MIN_POINTS} reward coins before redeeming` });
     }
 
     let wallet = await Wallet.findOne({ user: req.user.id });
@@ -42,7 +42,7 @@ router.post('/redeem', protect, authorize('vendor'), async (req, res) => {
     }
 
     if (wallet.reward_points < redeemPoints) {
-      return res.status(400).json({ message: 'Not enough reward points' });
+      return res.status(400).json({ message: 'Not enough reward coins' });
     }
 
     const hasPendingRequest = (wallet.reward_redemptions || []).some((request) => request.status === 'pending');

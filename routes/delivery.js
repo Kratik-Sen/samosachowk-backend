@@ -5,6 +5,7 @@ const Delivery = require('../models/Delivery');
 const Order = require('../models/Order');
 const User = require('../models/User');
 const { emitDeliveryLocation, emitDeliveryStatus, emitResourceChanged } = require('../realtime');
+const { awardDeliveredOrderRewards } = require('../utils/rewards');
 
 const DELIVERY_CLOSE_DISTANCE_KM = 0.7;
 const DELIVERY_CLOSE_DISTANCE_TEXT = '0.7 km';
@@ -290,6 +291,7 @@ router.put('/:id/delivered', protect, authorize('delivery'), async (req, res) =>
       if (payment_collected && order.payment_method === 'COD') {
         order.payment_status = 'completed';
       }
+      const rewardResult = await awardDeliveredOrderRewards({ order });
       await order.save();
 
       const trackedDelivery = await Delivery.findById(delivery._id)
@@ -297,13 +299,22 @@ router.put('/:id/delivered', protect, authorize('delivery'), async (req, res) =>
         .populate('delivery_boy', 'name');
       emitDeliveryStatus(req, trackedDelivery);
       emitResourceChanged(req, {
-        domains: ['deliveries', 'orders', 'sales', 'production', 'admin', 'vendors', 'wallet'],
+        domains: ['deliveries', 'orders', 'sales', 'production', 'admin', 'vendors', ...(rewardResult?.pointsAwarded ? ['wallet', 'rewards'] : [])],
         action: 'delivered',
         entity: 'delivery',
         entityId: delivery._id,
         audienceUsers: [order.user, delivery.delivery_boy],
         audienceRoles: ['admin', 'sales', 'production'],
       });
+      if (rewardResult?.pointsAwarded) {
+        emitResourceChanged(req, {
+          domains: ['wallet', 'vendors', 'rewards'],
+          action: 'earned',
+          entity: 'reward',
+          entityId: rewardResult.wallet._id,
+          audienceUsers: [order.user],
+        });
+      }
       
       res.json(delivery);
     } else {
