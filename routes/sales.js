@@ -57,7 +57,7 @@ router.get('/vendors', protect, authorize('sales', 'admin'), async (req, res) =>
 // @route   GET /api/sales/delivery-boys
 // @desc    Get active delivery boys for dispatch assignment
 // @access  Private (Sales/Admin)
-router.get('/delivery-boys', protect, authorize('sales', 'admin'), async (req, res) => {
+router.get('/delivery-boys', protect, authorize('sales', 'production', 'admin'), async (req, res) => {
   try {
     const busyDeliveryBoyIds = await getBusyDeliveryBoyIds();
     const deliveryBoys = await User.find({

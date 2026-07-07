@@ -31,8 +31,8 @@ const vendorSchema = mongoose.Schema(
     },
     location: {
       address: { type: String, required: true },
-      city: { type: String, required: true },
-      state: { type: String, required: true },
+      city: { type: String, default: '' },
+      state: { type: String, default: '' },
       zip: { type: String },
       lat: { type: Number },
       lng: { type: Number },
@@ -70,10 +70,8 @@ vendorSchema.methods.getMissingProfileFields = function () {
   const fields = [
     ['store_name', this.store_name],
     ['owner_name', this.owner_name],
+    ['gst_number', this.gst_number],
     ['address', location.address],
-    ['city', location.city],
-    ['state', location.state],
-    ['zip', location.zip],
   ];
 
   return fields

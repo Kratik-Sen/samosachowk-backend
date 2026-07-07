@@ -30,9 +30,10 @@ router.get('/dashboard', protect, authorize('production', 'admin'), async (req, 
 // @access  Private (Production/Admin)
 router.get('/orders', protect, authorize('production', 'admin'), async (req, res) => {
   try {
-    const orders = await Order.find({ status: { $in: ['Verified', 'In Production'] } })
+    const orders = await Order.find({ status: { $in: ['Verified', 'In Production', 'Ready'] } })
       .sort('createdAt')
-      .populate('user', 'name email phone');
+      .populate('user', 'name email phone')
+      .populate('delivery_boy', 'name phone status availability_status');
 
     res.json(orders);
   } catch (error) {

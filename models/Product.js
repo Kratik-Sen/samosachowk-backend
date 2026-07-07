@@ -27,6 +27,14 @@ const productSchema = mongoose.Schema(
       type: Number,
       default: 0,
     },
+    gst_rate: {
+      type: Number,
+      default: 5,
+    },
+    discount_rate: {
+      type: Number,
+      default: 0,
+    },
     status: {
       type: String,
       enum: ['Active', 'Inactive'],

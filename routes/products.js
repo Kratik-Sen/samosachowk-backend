@@ -53,6 +53,8 @@ const buildProductPayload = (body) => ({
   packages: parsePackages(body.packages),
   image: body.image,
   stock: Number(body.stock || 0),
+  gst_rate: Number(body.gst_rate || 0),
+  discount_rate: Number(body.discount_rate || 0),
   status: body.status || 'Active',
 });
 

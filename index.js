@@ -5,7 +5,6 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const { createRealtimeServer } = require('./realtime');
-const { rejectExpiredAssignments } = require('./utils/deliveryAssignmentTimeouts');
 
 dotenv.config({ override: true });
 dns.setServers([
@@ -41,12 +40,6 @@ app.use('/api/wallet', require('./routes/wallet'));
 app.use('/api/products', require('./routes/products'));
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/config', require('./routes/config'));
-
-setInterval(() => {
-  rejectExpiredAssignments({ app, user: {} }).catch((error) => {
-    console.error('Delivery assignment expiry check failed:', error.message);
-  });
-}, 5000);
 
 const PORT = process.env.PORT;
 

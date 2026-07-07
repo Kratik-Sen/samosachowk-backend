@@ -10,8 +10,7 @@ const { emitResourceChanged, emitVendorLocation } = require('../realtime');
 
 const ACTIVE_ORDER_STATUSES = ['Pending', 'Verified', 'In Production', 'Ready', 'Out for Delivery'];
 
-const formatCoordinate = (value) => Number(value).toFixed(5);
-const requiredProfileFields = ['name', 'store_name', 'address', 'city', 'state', 'zip'];
+const requiredProfileFields = ['name', 'email', 'phone', 'store_name', 'address', 'gst_number'];
 
 const cleanText = (value) => String(value || '').trim();
 
@@ -55,7 +54,7 @@ const normalizeLocationPayload = (body) => {
   }
 
   return {
-    location: source.location || source.address || `Current location (${formatCoordinate(lat)}, ${formatCoordinate(lng)})`,
+    location: source.location || source.address || 'Current location',
     lat,
     lng,
   };
@@ -98,8 +97,8 @@ router.post('/register', protect, authorize('vendor'), async (req, res) => {
 
 // @route   GET /api/vendors/dashboard
 // @desc    Get vendor dashboard stats
-// @access  Private (Vendor)
-router.get('/dashboard', protect, authorize('vendor'), async (req, res) => {
+// @access  Private (Vendor/Customer)
+router.get('/dashboard', protect, authorize('vendor', 'customer'), async (req, res) => {
   try {
     const orders = await Order.find({ user: req.user.id, status: { $in: ACTIVE_ORDER_STATUSES } })
       .sort('-createdAt')
@@ -130,8 +129,8 @@ router.get('/dashboard', protect, authorize('vendor'), async (req, res) => {
 
 // @route   GET /api/vendors/orders
 // @desc    Get all vendor orders
-// @access  Private (Vendor)
-router.get('/orders', protect, authorize('vendor'), async (req, res) => {
+// @access  Private (Vendor/Customer)
+router.get('/orders', protect, authorize('vendor', 'customer'), async (req, res) => {
   try {
     const filter = { user: req.user.id };
 
@@ -162,8 +161,8 @@ router.get('/orders', protect, authorize('vendor'), async (req, res) => {
 
 // @route   PUT /api/vendors/orders/:id/location
 // @desc    Update vendor current location for an active order
-// @access  Private (Vendor)
-router.put('/orders/:id/location', protect, authorize('vendor'), async (req, res) => {
+// @access  Private (Vendor/Customer)
+router.put('/orders/:id/location', protect, authorize('vendor', 'customer'), async (req, res) => {
   try {
     const nextLocation = normalizeLocationPayload(req.body);
 
@@ -189,7 +188,7 @@ router.put('/orders/:id/location', protect, authorize('vendor'), async (req, res
 
     res.json(nextLocation);
     emitResourceChanged(req, {
-      domains: ['vendors', 'orders', 'deliveries', 'sales', 'admin'],
+      domains: ['vendors', 'orders', 'deliveries', 'sales', 'production', 'admin'],
       action: 'vendor-location-updated',
       entity: 'order',
       entityId: order._id,
@@ -221,7 +220,7 @@ router.put('/profile', protect, authorize('vendor'), async (req, res) => {
 
     if (missingFields.length) {
       return res.status(400).json({
-        message: 'Complete all required vendor profile details.',
+        message: 'Complete all vendor profile details.',
         missingFields,
       });
     }

@@ -23,7 +23,7 @@ const generateToken = (id, role) => {
 };
 
 const vendorVerificationMethods = ['email', 'whatsapp'];
-const selfSignupRoles = ['sales', 'production', 'delivery'];
+const selfSignupRoles = ['customer', 'sales', 'production', 'delivery'];
 const WHATSAPP_EMAIL_DOMAIN = 'whatsapp.samosachowk.in';
 
 const normalizeEmail = (email) => String(email || '').trim().toLowerCase() || undefined;
@@ -47,9 +47,10 @@ const normalizePhone = (phone) => {
 };
 
 const normalizeCredential = (credential) => String(credential || '').trim();
-const buildWhatsAppPlaceholderEmail = (phone) => {
+const buildWhatsAppPlaceholderEmail = (phone, role = 'vendor') => {
   const digits = String(phone || '').replace(/\D/g, '');
-  return digits ? `wa-${digits}@${WHATSAPP_EMAIL_DOMAIN}` : undefined;
+  const prefix = role === 'customer' ? 'customer-wa' : 'wa';
+  return digits ? `${prefix}-${digits}@${WHATSAPP_EMAIL_DOMAIN}` : undefined;
 };
 
 const findUserByCredential = async (credential, role, selectPassword = false) => {
@@ -144,10 +145,13 @@ const sendEmailOtp = async ({ email, name, otp, purpose = 'vendor signup' }) => 
   const apiKey = process.env.RESEND_API_KEY;
   const from = process.env.RESEND_FROM_EMAIL;
   const isPasswordReset = purpose === 'password reset';
+  const isCustomerSignup = purpose === 'customer signup';
   const subject = isPasswordReset
     ? 'Samosa Chowk password reset OTP'
-    : 'Samosa Chowk vendor verification OTP';
-  const label = isPasswordReset ? 'password reset' : 'vendor signup';
+    : isCustomerSignup
+      ? 'Samosa Chowk customer verification OTP'
+      : 'Samosa Chowk vendor verification OTP';
+  const label = isPasswordReset ? 'password reset' : isCustomerSignup ? 'customer signup' : 'vendor signup';
 
   if (!apiKey || !from) {
     throw new Error('Resend is not configured. Add RESEND_API_KEY and RESEND_FROM_EMAIL in server .env.');
@@ -210,7 +214,7 @@ const sendWhatsAppOtp = async ({ phone, otp }) => {
   }
 
   if (!recipient) {
-    throw new Error('A valid vendor mobile number is required for WhatsApp OTP.');
+    throw new Error('A valid mobile number is required for WhatsApp OTP.');
   }
 
   const components = {
@@ -275,6 +279,19 @@ const sendWhatsAppOtp = async ({ phone, otp }) => {
 const sendVendorOtp = async ({ verificationMethod, email, phone, name, otp }) => {
   if (verificationMethod === 'email') {
     return sendEmailOtp({ email, name, otp });
+  }
+
+  return sendWhatsAppOtp({ phone, otp });
+};
+
+const sendSignupOtp = async ({ role, verificationMethod, email, phone, name, otp }) => {
+  if (verificationMethod === 'email') {
+    return sendEmailOtp({
+      email,
+      name,
+      otp,
+      purpose: role === 'customer' ? 'customer signup' : 'vendor signup',
+    });
   }
 
   return sendWhatsAppOtp({ phone, otp });
@@ -408,8 +425,8 @@ const registerVendor = async (req, res) => {
   }
 
   const otp = generateOtp();
-  await sendVendorOtp({ verificationMethod, email, phone, name, otp });
-  const accountEmail = email || buildWhatsAppPlaceholderEmail(phone);
+  await sendSignupOtp({ role: 'vendor', verificationMethod, email, phone, name, otp });
+  const accountEmail = email || buildWhatsAppPlaceholderEmail(phone, 'vendor');
 
   let user = existingUser;
   const otpFields = buildOtpFields(otp, verificationMethod);
@@ -457,8 +474,98 @@ const registerVendor = async (req, res) => {
   });
 };
 
+const registerCustomer = async (req, res) => {
+  const name = String(req.body.name || '').trim();
+  const password = String(req.body.password || '');
+  const email = normalizeEmail(req.body.email);
+  const phone = normalizePhone(req.body.phone);
+  const verificationMethod = vendorVerificationMethods.includes(req.body.verificationMethod)
+    ? req.body.verificationMethod
+    : '';
+
+  if (!name || !password) {
+    return res.status(400).json({ message: 'Name and password are required for customer signup' });
+  }
+
+  if (!verificationMethod) {
+    return res.status(400).json({ message: 'Select email or WhatsApp for OTP verification' });
+  }
+
+  if (verificationMethod === 'email' && !email) {
+    return res.status(400).json({ message: 'Email is required for email OTP verification' });
+  }
+
+  if (verificationMethod === 'whatsapp' && !phone) {
+    return res.status(400).json({ message: 'WhatsApp mobile number is required for OTP verification' });
+  }
+
+  if (password.length < 6) {
+    return res.status(400).json({ message: 'Password must be at least 6 characters' });
+  }
+
+  const existingUser = await User.findOne(
+    verificationMethod === 'email'
+      ? { email }
+      : { phone, role: 'customer' }
+  ).select('+password');
+
+  if (existingUser && (existingUser.role !== 'customer' || existingUser.status !== 'pending' || existingUser.otpVerifiedAt)) {
+    return res.status(400).json({
+      message: verificationMethod === 'email' ? 'This email is already registered' : 'This WhatsApp number is already registered',
+    });
+  }
+
+  const otp = generateOtp();
+  await sendSignupOtp({ role: 'customer', verificationMethod, email, phone, name, otp });
+  const accountEmail = email || buildWhatsAppPlaceholderEmail(phone, 'customer');
+  const otpFields = buildOtpFields(otp, verificationMethod);
+  let user = existingUser;
+
+  if (user) {
+    user.name = name;
+    user.email = accountEmail;
+    user.phone = phone;
+    user.password = password;
+    user.status = 'pending';
+    user.availability_status = 'inactive';
+    Object.assign(user, otpFields);
+    await user.save();
+  } else {
+    user = await User.create({
+      name,
+      email: accountEmail,
+      phone,
+      password,
+      role: 'customer',
+      status: 'pending',
+      availability_status: 'inactive',
+      ...otpFields,
+    });
+  }
+
+  res.status(existingUser ? 200 : 201).json({
+    _id: user.id,
+    name: user.name,
+    email: user.email,
+    phone: user.phone,
+    role: user.role,
+    status: user.status,
+    verificationMethod,
+    message:
+      verificationMethod === 'whatsapp'
+        ? 'OTP sent to your WhatsApp number. Verify it to activate your customer account.'
+        : 'OTP sent to your email. Verify it to activate your customer account.',
+  });
+  emitResourceChanged(req, {
+    domains: ['users', 'admin'],
+    action: 'customer-otp-sent',
+    entity: 'user',
+    entityId: user._id,
+  });
+};
+
 // @route   POST /api/auth/register
-// @desc    Team self signup request or vendor OTP signup
+// @desc    Customer/team self signup request or vendor OTP signup
 // @access  Public
 router.post('/register', async (req, res) => {
   try {
@@ -468,9 +575,13 @@ router.post('/register', async (req, res) => {
       return registerVendor(req, res);
     }
 
+    if (role === 'customer') {
+      return registerCustomer(req, res);
+    }
+
     if (!selfSignupRoles.includes(role)) {
       return res.status(403).json({
-        message: 'Select vendor, sales, production, or delivery for signup.',
+        message: 'Select customer, vendor, sales, production, or delivery for signup.',
       });
     }
 
@@ -592,6 +703,81 @@ router.post('/vendor/verify-otp', async (req, res) => {
   }
 });
 
+// @route   POST /api/auth/customer/verify-otp
+// @desc    Verify customer signup OTP and activate account
+// @access  Public
+router.post('/customer/verify-otp', async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body.email);
+    const phone = normalizePhone(req.body.phone);
+    const otp = String(req.body.otp || '').trim();
+
+    if ((!email && !phone) || !otp) {
+      return res.status(400).json({ message: 'Selected contact and OTP are required' });
+    }
+
+    const user = await User.findOne({
+      role: 'customer',
+      $or: [
+        ...(email ? [{ email }] : []),
+        ...(phone ? [{ phone }] : []),
+      ],
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: 'Customer signup request not found' });
+    }
+
+    if (user.status === 'active' && user.otpVerifiedAt) {
+      return res.json({ message: 'Customer account is already verified. You can login now.' });
+    }
+
+    if (!user.otpHash || !user.otpExpiresAt) {
+      return res.status(400).json({ message: 'No active OTP found. Request a new OTP.' });
+    }
+
+    if (user.otpExpiresAt.getTime() < Date.now()) {
+      return res.status(400).json({ message: 'OTP expired. Request a new OTP.' });
+    }
+
+    if ((user.otpAttempts || 0) >= 5) {
+      return res.status(429).json({ message: 'Too many OTP attempts. Request a new OTP.' });
+    }
+
+    if (hashOtp(otp) !== user.otpHash) {
+      user.otpAttempts = (user.otpAttempts || 0) + 1;
+      await user.save();
+      return res.status(400).json({ message: 'Invalid OTP' });
+    }
+
+    const verifiedMethod = user.otpVerificationMethod;
+
+    user.status = 'active';
+    user.otpVerifiedAt = new Date();
+    clearOtpFields(user);
+    await user.save();
+
+    res.json({
+      _id: user.id,
+      name: user.name,
+      email: user.email,
+      phone: user.phone,
+      role: user.role,
+      status: user.status,
+      verificationMethod: verifiedMethod,
+      message: `Customer account verified. Login with ${verifiedMethod === 'whatsapp' ? 'phone' : 'email'} to order.`,
+    });
+    emitResourceChanged(req, {
+      domains: ['users', 'admin'],
+      action: 'customer-verified',
+      entity: 'user',
+      entityId: user._id,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
 // @route   POST /api/auth/vendor/resend-otp
 // @desc    Resend vendor signup OTP
 // @access  Public
@@ -627,7 +813,8 @@ router.post('/vendor/resend-otp', async (req, res) => {
     }
 
     const otp = generateOtp();
-    await sendVendorOtp({
+    await sendSignupOtp({
+      role: 'vendor',
       verificationMethod,
       email: user.email,
       phone,
@@ -649,6 +836,72 @@ router.post('/vendor/resend-otp', async (req, res) => {
     emitResourceChanged(req, {
       domains: ['users'],
       action: 'vendor-otp-resent',
+      entity: 'user',
+      entityId: user._id,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// @route   POST /api/auth/customer/resend-otp
+// @desc    Resend customer signup OTP
+// @access  Public
+router.post('/customer/resend-otp', async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body.email);
+    const requestPhone = normalizePhone(req.body.phone);
+    const requestedMethod = vendorVerificationMethods.includes(req.body.verificationMethod)
+      ? req.body.verificationMethod
+      : '';
+
+    if (!email && !requestPhone) {
+      return res.status(400).json({ message: 'Selected contact is required' });
+    }
+
+    const user = await User.findOne({
+      role: 'customer',
+      $or: [
+        ...(email ? [{ email }] : []),
+        ...(requestPhone ? [{ phone: requestPhone }] : []),
+      ],
+    }).select('+password');
+
+    if (!user || user.status !== 'pending' || user.otpVerifiedAt) {
+      return res.status(404).json({ message: 'Pending customer signup request not found' });
+    }
+
+    const verificationMethod = requestedMethod || user.otpVerificationMethod || 'email';
+    const phone = requestPhone || normalizePhone(user.phone);
+
+    if (verificationMethod === 'whatsapp' && !phone) {
+      return res.status(400).json({ message: 'Customer mobile number is required for WhatsApp OTP' });
+    }
+
+    const otp = generateOtp();
+    await sendSignupOtp({
+      role: 'customer',
+      verificationMethod,
+      email: user.email,
+      phone,
+      name: user.name,
+      otp,
+    });
+
+    user.phone = phone || user.phone;
+    Object.assign(user, buildOtpFields(otp, verificationMethod));
+    await user.save();
+
+    res.json({
+      verificationMethod,
+      message:
+        verificationMethod === 'whatsapp'
+          ? 'New OTP sent to your WhatsApp number.'
+          : 'New OTP sent to your email.',
+    });
+    emitResourceChanged(req, {
+      domains: ['users'],
+      action: 'customer-otp-resent',
       entity: 'user',
       entityId: user._id,
     });
@@ -700,7 +953,11 @@ router.post('/login', async (req, res) => {
 
     const user = await findUserByCredential(credential, role, true);
 
-    if (user && (await user.matchPassword(password))) {
+    if (!user) {
+      return res.status(404).json({ message: 'account not exist please signup' });
+    }
+
+    if (await user.matchPassword(password)) {
       if (user.role !== role) {
         return res.status(401).json({ message: `This credential is not for ${role} login` });
       }
@@ -708,6 +965,10 @@ router.post('/login', async (req, res) => {
       if (user.status === 'pending') {
         if (user.role === 'vendor' && (user.otpHash || user.otpExpiresAt)) {
           return res.status(403).json({ message: 'Please verify your vendor OTP before login' });
+        }
+
+        if (user.role === 'customer' && (user.otpHash || user.otpExpiresAt)) {
+          return res.status(403).json({ message: 'Please verify your customer OTP before login' });
         }
 
         return res.status(403).json({ message: 'Your signup request is waiting for admin verification' });

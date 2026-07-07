@@ -10,7 +10,7 @@ const { protect, authorize } = require('../middleware/auth');
 const { emitAccountDeleted, emitResourceChanged, emitSignupStatus } = require('../realtime');
 
 const adminOnly = [protect, authorize('admin')];
-const manageableRoles = ['vendor', 'sales', 'production', 'delivery'];
+const manageableRoles = ['customer', 'vendor', 'sales', 'production', 'delivery'];
 const allRoles = [...manageableRoles, 'admin'];
 
 const publicUserFields = '-password';
@@ -100,6 +100,7 @@ const getPeriodAnalytics = async (start, end) => {
     .select('user delivery_boy final_amount payment_status status_updates')
     .lean();
   const activeSets = {
+    customer: new Set(),
     vendor: new Set(),
     sales: new Set(),
     production: new Set(),
@@ -115,7 +116,11 @@ const getPeriodAnalytics = async (start, end) => {
         acc.pendingPayments += Number(order.final_amount || 0);
       }
 
-      addIdToSet(activeSets.vendor, order.user);
+      if (order.customer_role === 'customer') {
+        addIdToSet(activeSets.customer, order.user);
+      } else {
+        addIdToSet(activeSets.vendor, order.user);
+      }
       addIdToSet(activeSets.delivery, order.delivery_boy);
 
       (order.status_updates || []).forEach((update) => {
@@ -140,6 +145,7 @@ const getPeriodAnalytics = async (start, end) => {
   return {
     ...summary,
     activeCounts: {
+      customer: activeSets.customer.size,
       vendor: activeSets.vendor.size,
       sales: activeSets.sales.size,
       production: activeSets.production.size,

@@ -7,6 +7,11 @@ const orderSchema = mongoose.Schema(
       ref: 'User',
       required: false, // guest checkout support
     },
+    customer_role: {
+      type: String,
+      enum: ['customer', 'vendor', 'guest'],
+      default: 'guest',
+    },
     customer_name: { type: String, required: true },
     customer_phone: { type: String, required: true },
     items: [
@@ -23,6 +28,7 @@ const orderSchema = mongoose.Schema(
     ],
     total_amount: { type: Number, required: true },
     discount_amount: { type: Number, default: 0 },
+    discount_rate: { type: Number, default: 0 },
     gst_rate: { type: Number, default: 0 },
     gst_amount: { type: Number, default: 0 },
     final_amount: { type: Number, required: true },

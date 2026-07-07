@@ -8,7 +8,6 @@ const Delivery = require('../models/Delivery');
 const User = require('../models/User');
 const Wallet = require('../models/Wallet');
 const { emitDeliveryAssigned, emitResourceChanged } = require('../realtime');
-const { getAssignmentExpiry, rejectExpiredAssignments } = require('../utils/deliveryAssignmentTimeouts');
 
 const normalizePaymentMethod = (method) => {
   const value = String(method || 'COD').toUpperCase();
@@ -21,11 +20,15 @@ const normalizePaymentMethod = (method) => {
 };
 
 const roundMoney = (value) => Math.round(Number(value || 0) * 100) / 100;
-const REWARD_SPEND_STEP = 100;
-const REWARD_POINTS_PER_STEP = 100;
 
-const awardOrderRewards = async ({ userId, userRole, amount, orderId }) => {
-  if (!userId || userRole !== 'vendor' || amount <= 0) {
+const awardOrderRewards = async ({ userId, userRole, items, orderId }) => {
+  if (!userId || userRole !== 'vendor') {
+    return null;
+  }
+
+  const pointsAwarded = (items || []).reduce((sum, item) => sum + Math.max(0, Number(item.quantity || 0)), 0);
+
+  if (!pointsAwarded) {
     return null;
   }
 
@@ -35,23 +38,12 @@ const awardOrderRewards = async ({ userId, userRole, amount, orderId }) => {
     wallet = await Wallet.create({ user: userId });
   }
 
-  wallet.reward_order_total = roundMoney(Number(wallet.reward_order_total || 0) + Number(amount || 0));
-  const completedThresholds = Math.floor(wallet.reward_order_total / REWARD_SPEND_STEP);
-  const newlyCompletedThresholds = Math.max(0, completedThresholds - Number(wallet.reward_thresholds_awarded || 0));
-
-  if (!newlyCompletedThresholds) {
-    await wallet.save();
-    return { wallet, pointsAwarded: 0 };
-  }
-
-  const pointsAwarded = newlyCompletedThresholds * REWARD_POINTS_PER_STEP;
-  wallet.reward_thresholds_awarded = completedThresholds;
   wallet.reward_points += pointsAwarded;
   wallet.transactions.unshift({
     title: 'Order reward coins',
     type: 'reward',
     points: pointsAwarded,
-    notes: `Reward for completing Rs ${completedThresholds * REWARD_SPEND_STEP} order value. Order ${orderId?.toString().slice(-6).toUpperCase()}.`,
+    notes: `Reward for ${pointsAwarded} ordered pieces. Order ${orderId?.toString().slice(-6).toUpperCase()}.`,
   });
 
   await wallet.save();
@@ -68,7 +60,7 @@ const addStatusUpdate = (order, status, note, userId) => {
 
 const populateOrder = (query) =>
   query
-    .populate('user', 'name email phone')
+    .populate('user', 'name email phone role')
     .populate('items.product', 'name category image price status packages')
     .populate('delivery_boy', 'name phone status availability_status');
 
@@ -109,7 +101,7 @@ const getHistoryFilterForUser = (user) => {
     updatedAt: { $gte: getHistoryCutoffDate() },
   };
 
-  if (user.role === 'vendor') {
+  if (['vendor', 'customer'].includes(user.role)) {
     filter.user = user.id;
   }
 
@@ -196,6 +188,7 @@ router.post('/', optionalAuth, async (req, res) => {
       items, 
       total_amount, 
       discount_amount, 
+      discount_rate,
       gst_rate,
       gst_amount,
       final_amount, 
@@ -225,6 +218,7 @@ router.post('/', optionalAuth, async (req, res) => {
         : payment_status || 'pending';
     const normalizedTotalAmount = roundMoney(total_amount);
     const normalizedDiscountAmount = roundMoney(discount_amount);
+    const normalizedDiscountRate = Number(discount_rate || 0);
     const normalizedGstRate = Number(gst_rate || 0);
     const normalizedGstAmount = roundMoney(gst_amount);
     const normalizedFinalAmount = roundMoney(
@@ -233,11 +227,13 @@ router.post('/', optionalAuth, async (req, res) => {
 
     const order = await Order.create({
       user: req.user ? req.user.id : null,
+      customer_role: req.user?.role === 'customer' || req.user?.role === 'vendor' ? req.user.role : 'guest',
       customer_name,
       customer_phone,
       items,
       total_amount: normalizedTotalAmount,
       discount_amount: normalizedDiscountAmount,
+      discount_rate: normalizedDiscountRate,
       gst_rate: normalizedGstRate,
       gst_amount: normalizedGstAmount,
       final_amount: normalizedFinalAmount,
@@ -256,8 +252,8 @@ router.post('/', optionalAuth, async (req, res) => {
           status: 'Pending',
           note:
             normalizedPaymentMethod === 'RAZORPAY'
-              ? 'Vendor paid online and order was sent to sales.'
-              : 'Vendor selected COD and order was sent to sales.',
+              ? 'Order was paid online and sent to sales.'
+              : 'COD order was sent to sales.',
           updated_by: req.user && req.user.id !== 'env-admin' ? req.user.id : undefined,
         },
       ],
@@ -266,7 +262,7 @@ router.post('/', optionalAuth, async (req, res) => {
     const rewardResult = await awardOrderRewards({
       userId: order.user,
       userRole: req.user?.role,
-      amount: normalizedFinalAmount,
+      items,
       orderId: order._id,
     });
 
@@ -298,8 +294,6 @@ router.post('/', optionalAuth, async (req, res) => {
 // @access  Private (Sales/Production/Delivery/Admin)
 router.get('/', protect, authorize('sales', 'production', 'delivery', 'admin'), async (req, res) => {
   try {
-    await rejectExpiredAssignments(req);
-
     const filter = {};
 
     if (req.query.status) {
@@ -327,7 +321,7 @@ router.get('/', protect, authorize('sales', 'production', 'delivery', 'admin'), 
 // @route   GET /api/orders/history
 // @desc    Get role-aware order history, paged 8 at a time and retained for 20 days
 // @access  Private (Vendor/Sales/Production/Delivery/Admin)
-router.get('/history', protect, authorize('vendor', 'sales', 'production', 'delivery', 'admin'), async (req, res) => {
+router.get('/history', protect, authorize('customer', 'vendor', 'sales', 'production', 'delivery', 'admin'), async (req, res) => {
   try {
     const page = parsePositiveInt(req.query.page, 1);
     const limit = Math.min(parsePositiveInt(req.query.limit, HISTORY_DEFAULT_LIMIT), HISTORY_MAX_LIMIT);
@@ -435,11 +429,9 @@ router.put('/:id/verify', protect, authorize('sales', 'admin'), async (req, res)
 
 // @route   PUT /api/orders/:id/assign-delivery
 // @desc    Assign delivery boy to order
-// @access  Private (Admin/Sales/Delivery)
-router.put('/:id/assign-delivery', protect, authorize('admin', 'sales', 'delivery'), async (req, res) => {
+// @access  Private (Admin/Production)
+router.put('/:id/assign-delivery', protect, authorize('admin', 'production'), async (req, res) => {
   try {
-    await rejectExpiredAssignments(req, { order: req.params.id });
-
     const deliveryBoy = await User.findOne({
       _id: req.body.delivery_boy_id,
       role: 'delivery',
@@ -487,7 +479,7 @@ router.put('/:id/assign-delivery', protect, authorize('admin', 'sales', 'deliver
           delivery_boy: req.body.delivery_boy_id,
           status: 'Assigned',
           notes: req.body.notes,
-          assigned_expires_at: getAssignmentExpiry(),
+          assigned_expires_at: null,
           responded_at: null,
         },
         { upsert: true, new: true, setDefaultsOnInsert: true }
