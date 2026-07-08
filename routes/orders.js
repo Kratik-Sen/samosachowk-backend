@@ -6,7 +6,7 @@ const { protect, optionalAuth, authorize } = require('../middleware/auth');
 const Order = require('../models/Order');
 const Delivery = require('../models/Delivery');
 const User = require('../models/User');
-const { emitDeliveryAssigned, emitResourceChanged } = require('../realtime');
+const { emitDeliveryAssigned, emitNotification, emitResourceChanged, formatOrderAmount, summarizeOrderItems } = require('../realtime');
 const { attachRewardCoinsToItems } = require('../utils/rewards');
 
 const normalizePaymentMethod = (method) => {
@@ -28,6 +28,8 @@ const addStatusUpdate = (order, status, note, userId) => {
     updated_by: userId && userId !== 'env-admin' ? userId : undefined,
   });
 };
+
+const getOrderActorName = (order) => order.customer_name || order.user?.name || 'Vendor';
 
 const populateOrder = (query) =>
   query
@@ -156,7 +158,7 @@ router.post('/', optionalAuth, async (req, res) => {
     const { 
       customer_name, 
       customer_phone, 
-      items, 
+      items,
       total_amount, 
       discount_amount, 
       discount_rate,
@@ -202,7 +204,7 @@ router.post('/', optionalAuth, async (req, res) => {
       customer_role: req.user?.role === 'customer' || req.user?.role === 'vendor' ? req.user.role : 'guest',
       customer_name,
       customer_phone,
-      items,
+      items: orderItems,
       total_amount: normalizedTotalAmount,
       discount_amount: normalizedDiscountAmount,
       discount_rate: normalizedDiscountRate,
@@ -232,6 +234,27 @@ router.post('/', optionalAuth, async (req, res) => {
     });
 
     res.status(201).json(order);
+    const itemSummary = summarizeOrderItems(order);
+    const actorName = getOrderActorName(order);
+
+    if (order.user) {
+      emitNotification(req, {
+        title: `Order placed: ${itemSummary}`,
+        message: `Your order for ${itemSummary} is placed, total ${formatOrderAmount(order)}.`,
+        type: 'order-placed',
+        entity: 'order',
+        entityId: order._id,
+        users: [order.user],
+      });
+    }
+    emitNotification(req, {
+      title: `New order: ${itemSummary}`,
+      message: `${actorName} ordered ${itemSummary}, total ${formatOrderAmount(order)}.`,
+      type: 'order-created',
+      entity: 'order',
+      entityId: order._id,
+      roles: ['sales'],
+    });
     emitResourceChanged(req, {
       domains: ['orders', 'sales', 'admin', 'vendors'],
       action: 'created',
@@ -340,6 +363,15 @@ router.put('/:id/status', protect, authorize('sales', 'production', 'delivery', 
 
       const updatedOrder = await order.save();
       res.json(updatedOrder);
+      emitNotification(req, {
+        title: `${order.status}: ${summarizeOrderItems(order)}`,
+        message: `${getOrderActorName(order)} order of ${summarizeOrderItems(order)} is now ${order.status}, total ${formatOrderAmount(order)}.`,
+        type: 'order-status',
+        entity: 'order',
+        entityId: order._id,
+        users: [order.user, order.delivery_boy],
+        roles: ['sales', 'production'],
+      });
       emitResourceChanged(req, {
         domains: ['orders', 'sales', 'production', 'admin', 'vendors', 'deliveries'],
         action: 'status-updated',
@@ -367,6 +399,24 @@ router.put('/:id/verify', protect, authorize('sales', 'admin'), async (req, res)
       addStatusUpdate(order, 'Verified', req.body.note || 'Sales verified order and sent it to production.', req.user.id);
       const updatedOrder = await order.save();
       res.json(updatedOrder);
+      emitNotification(req, {
+        title: `Sent to production: ${summarizeOrderItems(order)}`,
+        message: `${getOrderActorName(order)} order of ${summarizeOrderItems(order)} for ${formatOrderAmount(order)} is verified and sent to production.`,
+        type: 'order-verified',
+        entity: 'order',
+        entityId: order._id,
+        roles: ['sales', 'production'],
+      });
+      if (order.user) {
+        emitNotification(req, {
+          title: `Order verified: ${summarizeOrderItems(order)}`,
+          message: `Your ${summarizeOrderItems(order)} order for ${formatOrderAmount(order)} is verified and sent to production.`,
+          type: 'order-verified',
+          entity: 'order',
+          entityId: order._id,
+          users: [order.user],
+        });
+      }
       emitResourceChanged(req, {
         domains: ['orders', 'sales', 'production', 'admin', 'vendors'],
         action: 'verified',

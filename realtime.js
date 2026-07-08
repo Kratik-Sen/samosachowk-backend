@@ -2,6 +2,7 @@ const jwt = require('jsonwebtoken');
 const { Server } = require('socket.io');
 const Delivery = require('./models/Delivery');
 const User = require('./models/User');
+const { sendExpoPushNotifications } = require('./utils/pushNotifications');
 
 const userRoom = (userId) => `user:${userId}`;
 const deliveryRoom = (deliveryId) => `delivery:${deliveryId}`;
@@ -26,6 +27,18 @@ const getUserPhone = (user) => {
 
   return user.phone || '';
 };
+
+const summarizeOrderItems = (orderOrItems) => {
+  const items = Array.isArray(orderOrItems) ? orderOrItems : orderOrItems?.items || [];
+  const summary = items
+    .map((item) => `${Number(item.quantity || 0)} ${item.name || 'item'}`)
+    .filter(Boolean)
+    .join(', ');
+
+  return summary || 'order items';
+};
+
+const formatOrderAmount = (order) => `Rs ${Number(order?.final_amount || 0).toFixed(0)}`;
 
 const serializeLocation = (location) => {
   if (!location) {
@@ -270,7 +283,10 @@ const emitDeliveryAssigned = async (req, deliveryId) => {
     return;
   }
 
-  const delivery = await Delivery.findById(deliveryId).populate('order', 'user customer_name customer_phone delivery_address status');
+  const delivery = await Delivery.findById(deliveryId).populate(
+    'order',
+    'user customer_name customer_phone delivery_address status items final_amount payment_method'
+  );
 
   if (!delivery || !delivery.order) {
     return;
@@ -291,6 +307,54 @@ const emitDeliveryAssigned = async (req, deliveryId) => {
   };
 
   io.to(userRoom(delivery.delivery_boy)).emit('delivery:assigned', payload);
+  emitNotification(req, {
+    title: `New delivery: ${summarizeOrderItems(delivery.order)}`,
+    message: `Deliver ${summarizeOrderItems(delivery.order)} to ${delivery.order.customer_name || 'vendor'}, total ${formatOrderAmount(delivery.order)}.`,
+    type: 'delivery-assigned',
+    entity: 'delivery',
+    entityId: delivery._id,
+    users: [delivery.delivery_boy],
+    data: payload,
+  });
+};
+
+const emitNotification = (
+  req,
+  {
+    title,
+    message,
+    type = 'info',
+    entity,
+    entityId,
+    users = [],
+    roles = [],
+    data = {},
+  } = {}
+) => {
+  if (!message) {
+    return;
+  }
+
+  const payload = {
+    id: `${type}:${entity || 'general'}:${entityId || Date.now()}:${Date.now()}`,
+    title: title || 'Notification',
+    message,
+    type,
+    entity,
+    entityId: entityId?.toString(),
+    data,
+    createdAt: new Date().toISOString(),
+  };
+
+  sendExpoPushNotifications({
+    users,
+    roles,
+    title: payload.title,
+    body: payload.message,
+    data: payload,
+  }).catch((error) => {
+    console.warn('Expo push notification failed:', error.message);
+  });
 };
 
 const emitDeliveryStatus = (req, delivery) => {
@@ -414,4 +478,7 @@ module.exports = {
   emitDeliveryStatus,
   emitAccountDeleted,
   emitSignupStatus,
+  emitNotification,
+  formatOrderAmount,
+  summarizeOrderItems,
 };

@@ -40,6 +40,7 @@ app.use('/api/wallet', require('./routes/wallet'));
 app.use('/api/products', require('./routes/products'));
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/config', require('./routes/config'));
+app.use('/api/notifications', require('./routes/notifications'));
 
 const PORT = process.env.PORT;
 

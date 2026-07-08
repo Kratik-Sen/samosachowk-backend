@@ -4,7 +4,7 @@ const { protect, authorize } = require('../middleware/auth');
 const Delivery = require('../models/Delivery');
 const Order = require('../models/Order');
 const User = require('../models/User');
-const { emitDeliveryLocation, emitDeliveryStatus, emitResourceChanged } = require('../realtime');
+const { emitDeliveryLocation, emitDeliveryStatus, emitNotification, emitResourceChanged, formatOrderAmount, summarizeOrderItems } = require('../realtime');
 const { awardDeliveredOrderRewards } = require('../utils/rewards');
 
 const DELIVERY_CLOSE_DISTANCE_KM = 0.7;
@@ -60,6 +60,8 @@ const addStatusUpdate = (order, status, note, userId) => {
     updated_by: userId && userId !== 'env-admin' ? userId : undefined,
   });
 };
+
+const getOrderActorName = (order) => order?.customer_name || 'Vendor';
 
 // @route   GET /api/delivery/dashboard
 // @desc    Get assigned deliveries for delivery boy
@@ -180,6 +182,15 @@ router.put('/:id/accept', protect, authorize('delivery'), async (req, res) => {
         .populate('order', 'user status customer_name')
         .populate('delivery_boy', 'name');
       emitDeliveryStatus(req, trackedDelivery);
+      emitNotification(req, {
+        title: `Delivery accepted: ${summarizeOrderItems(order)}`,
+        message: `${trackedDelivery.delivery_boy?.name || 'Delivery boy'} accepted ${getOrderActorName(order)} order of ${summarizeOrderItems(order)} for ${formatOrderAmount(order)}.`,
+        type: 'delivery-accepted',
+        entity: 'delivery',
+        entityId: delivery._id,
+        users: [order?.user],
+        roles: ['production'],
+      });
       emitResourceChanged(req, {
         domains: ['deliveries', 'orders', 'sales', 'production', 'admin', 'vendors'],
         action: 'accepted',
@@ -232,6 +243,14 @@ router.put('/:id/reject', protect, authorize('delivery'), async (req, res) => {
       .populate('order', 'user status customer_name')
       .populate('delivery_boy', 'name');
     emitDeliveryStatus(req, trackedDelivery);
+    emitNotification(req, {
+      title: `Delivery rejected: ${summarizeOrderItems(order)}`,
+      message: `${trackedDelivery.delivery_boy?.name || 'Delivery boy'} rejected ${getOrderActorName(order)} order of ${summarizeOrderItems(order)}; assign another delivery boy.`,
+      type: 'delivery-rejected',
+      entity: 'delivery',
+      entityId: delivery._id,
+      roles: ['production'],
+    });
     emitResourceChanged(req, {
       domains: ['deliveries', 'orders', 'sales', 'production', 'admin', 'vendors'],
       action: 'rejected',
@@ -298,6 +317,14 @@ router.put('/:id/delivered', protect, authorize('delivery'), async (req, res) =>
         .populate('order', 'user status customer_name')
         .populate('delivery_boy', 'name');
       emitDeliveryStatus(req, trackedDelivery);
+      emitNotification(req, {
+        title: `Delivered: ${summarizeOrderItems(order)}`,
+        message: `${getOrderActorName(order)} order of ${summarizeOrderItems(order)} for ${formatOrderAmount(order)} was delivered${order.payment_method === 'COD' ? ' and COD was marked collected' : ''}.`,
+        type: 'delivery-completed',
+        entity: 'delivery',
+        entityId: delivery._id,
+        users: [order.user, delivery.delivery_boy],
+      });
       emitResourceChanged(req, {
         domains: ['deliveries', 'orders', 'sales', 'production', 'admin', 'vendors', ...(rewardResult?.pointsAwarded ? ['wallet', 'rewards'] : [])],
         action: 'delivered',

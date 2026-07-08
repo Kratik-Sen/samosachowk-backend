@@ -3,7 +3,7 @@ const router = express.Router();
 const { protect, authorize } = require('../middleware/auth');
 const Production = require('../models/Production');
 const Order = require('../models/Order');
-const { emitResourceChanged } = require('../realtime');
+const { emitNotification, emitResourceChanged, formatOrderAmount, summarizeOrderItems } = require('../realtime');
 
 const addStatusUpdate = (order, status, note, userId) => {
   order.status_updates.push({
@@ -12,6 +12,8 @@ const addStatusUpdate = (order, status, note, userId) => {
     updated_by: userId && userId !== 'env-admin' ? userId : undefined,
   });
 };
+
+const getOrderActorName = (order) => order.customer_name || 'Vendor';
 
 // @route   GET /api/production/dashboard
 // @desc    Get production overview
@@ -61,6 +63,14 @@ router.put('/orders/:id/start', protect, authorize('production', 'admin'), async
 
     const updatedOrder = await order.save();
     res.json(updatedOrder);
+    emitNotification(req, {
+      title: `Production started: ${summarizeOrderItems(order)}`,
+      message: `${getOrderActorName(order)} order of ${summarizeOrderItems(order)} for ${formatOrderAmount(order)} is now being prepared.`,
+      type: 'production-started',
+      entity: 'order',
+      entityId: order._id,
+      users: [order.user],
+    });
     emitResourceChanged(req, {
       domains: ['orders', 'production', 'sales', 'admin', 'vendors'],
       action: 'production-started',
@@ -94,6 +104,14 @@ router.put('/orders/:id/ready', protect, authorize('production', 'admin'), async
 
     const updatedOrder = await order.save();
     res.json(updatedOrder);
+    emitNotification(req, {
+      title: `Order ready: ${summarizeOrderItems(order)}`,
+      message: `${getOrderActorName(order)} order of ${summarizeOrderItems(order)} for ${formatOrderAmount(order)} is packed and ready.`,
+      type: 'production-ready',
+      entity: 'order',
+      entityId: order._id,
+      users: [order.user],
+    });
     emitResourceChanged(req, {
       domains: ['orders', 'production', 'sales', 'admin', 'vendors'],
       action: 'ready',
