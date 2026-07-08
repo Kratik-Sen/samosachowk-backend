@@ -32,6 +32,11 @@ const pushTokenSchema = mongoose.Schema(
       type: Date,
       default: Date.now,
     },
+    last_sent_at: Date,
+    last_error: {
+      type: String,
+      default: '',
+    },
   },
   {
     timestamps: true,

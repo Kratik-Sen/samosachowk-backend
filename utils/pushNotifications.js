@@ -38,14 +38,40 @@ const resolvePushTokens = async ({ users = [], roles = [] } = {}) => {
   return uniqueStrings(docs.map((doc) => doc.token)).filter(isExpoPushToken);
 };
 
-const deactivateTokens = async (tokens) => {
+const deactivateTokens = async (tokens, lastError = 'DeviceNotRegistered') => {
   const tokenList = uniqueStrings(tokens);
 
   if (!tokenList.length) {
     return;
   }
 
-  await PushToken.updateMany({ token: { $in: tokenList } }, { active: false });
+  await PushToken.updateMany({ token: { $in: tokenList } }, { active: false, last_error: lastError });
+};
+
+const markTokensSent = async (tokens) => {
+  const tokenList = uniqueStrings(tokens);
+
+  if (!tokenList.length) {
+    return;
+  }
+
+  await PushToken.updateMany(
+    { token: { $in: tokenList } },
+    { last_sent_at: new Date(), last_error: '' }
+  );
+};
+
+const markTokenErrors = async (errors) => {
+  const entries = Object.entries(errors || {});
+
+  await Promise.all(
+    entries.map(([token, error]) =>
+      PushToken.updateOne(
+        { token },
+        { last_error: error || 'Expo push ticket error' }
+      )
+    )
+  );
 };
 
 const sendExpoPushNotifications = async ({ users = [], roles = [], title, body, data = {} }) => {
@@ -60,6 +86,8 @@ const sendExpoPushNotifications = async ({ users = [], roles = [], title, body, 
   }
 
   const inactiveTokens = [];
+  const ticketErrors = {};
+  const sentTokens = [];
 
   for (const batch of chunk(tokens, MAX_BATCH_SIZE)) {
     const messages = batch.map((to) => ({
@@ -89,14 +117,37 @@ const sendExpoPushNotifications = async ({ users = [], roles = [], title, body, 
     }
 
     (result?.data || []).forEach((ticket, index) => {
+      const token = batch[index];
+
       if (ticket?.details?.error === 'DeviceNotRegistered') {
-        inactiveTokens.push(batch[index]);
+        inactiveTokens.push(token);
+        return;
       }
+
+      if (ticket?.status === 'error') {
+        ticketErrors[token] = ticket?.details?.error || ticket?.message || 'Expo push ticket error';
+        return;
+      }
+
+      sentTokens.push(token);
     });
   }
 
-  await deactivateTokens(inactiveTokens);
-  return { sent: tokens.length, deactivated: inactiveTokens.length };
+  await Promise.all([
+    markTokensSent(sentTokens),
+    markTokenErrors(ticketErrors),
+    deactivateTokens(inactiveTokens),
+  ]);
+
+  if (Object.keys(ticketErrors).length) {
+    console.warn('Expo push ticket errors:', ticketErrors);
+  }
+
+  return {
+    sent: sentTokens.length,
+    failed: Object.keys(ticketErrors).length,
+    deactivated: inactiveTokens.length,
+  };
 };
 
 module.exports = {
