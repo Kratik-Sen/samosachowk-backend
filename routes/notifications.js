@@ -25,6 +25,7 @@ router.post('/push-token', protect, async (req, res) => {
         role: req.user.role,
         platform: String(req.body.platform || ''),
         active: true,
+        last_error: '',
         last_registered_at: new Date(),
       },
       { upsert: true, new: true, setDefaultsOnInsert: true }
